@@ -6,7 +6,7 @@ const {
   ListVocabulariesCommand,
 } = require("@aws-sdk/client-transcribe");
 const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
-const { UpdateCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, PutCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 const { docClient } = require("../db/dynamodb");
 const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs");
 
@@ -167,26 +167,38 @@ async function updateMeetingStatus(meetingId, status, extraAttrs = {}) {
 
 // --------------- Message Parsing ---------------
 
+function parseMeetingTypeFromFilename(filename) {
+  if (filename.startsWith("weekly__")) return "weekly";
+  if (filename.startsWith("tech__")) return "tech";
+  return "general";
+}
+
 function parseMessage(body) {
   // S3 Event Notification format
   if (body.Records && body.Records[0] && body.Records[0].s3) {
     const s3Event = body.Records[0].s3;
     const s3Key = decodeURIComponent(s3Event.object.key.replace(/\+/g, " "));
     const filename = s3Key.split("/").pop();
-    const baseName = filename.replace(/\.[^.]+$/, "");
     const meetingId = `meeting-${Date.now()}`;
-    return { meetingId, s3Key, filename, isS3Event: true };
+    const meetingType = parseMeetingTypeFromFilename(filename);
+    return { meetingId, s3Key, filename, meetingType, isS3Event: true };
   }
 
   // Internal format
-  return { meetingId: body.meetingId, s3Key: body.s3Key, filename: body.filename, isS3Event: false };
+  return {
+    meetingId: body.meetingId,
+    s3Key: body.s3Key,
+    filename: body.filename,
+    meetingType: body.meetingType || "general",
+    isS3Event: false,
+  };
 }
 
 // --------------- Message Processing ---------------
 
 async function processMessage(message) {
   const body = JSON.parse(message.Body);
-  const { meetingId, s3Key, filename, isS3Event } = parseMessage(body);
+  const { meetingId, s3Key, filename, meetingType, isS3Event } = parseMessage(body);
 
   // Skip .keep files
   if (s3Key.endsWith(".keep")) {
@@ -196,7 +208,7 @@ async function processMessage(message) {
 
   // Auto-create DynamoDB record for S3 Event messages
   if (isS3Event) {
-    console.log(`[S3 Event] Creating meeting record: ${meetingId}`);
+    console.log(`[S3 Event] Creating meeting record: ${meetingId} (type: ${meetingType})`);
     await docClient.send(new PutCommand({
       TableName: DYNAMODB_TABLE,
       Item: {
@@ -204,6 +216,7 @@ async function processMessage(message) {
         status: "pending",
         filename,
         s3Key,
+        meetingType,
         createdAt: new Date().toISOString(),
       },
     }));
@@ -235,11 +248,28 @@ async function processMessage(message) {
     whisperKey: whisperKey || "",
   });
 
+  // Resolve meetingType: use parsed value, or look up from DynamoDB
+  let resolvedMeetingType = meetingType;
+  if (!resolvedMeetingType || resolvedMeetingType === "general") {
+    try {
+      const { Item } = await docClient.send(new GetCommand({
+        TableName: DYNAMODB_TABLE,
+        Key: { meetingId },
+      }));
+      if (Item && Item.meetingType) {
+        resolvedMeetingType = Item.meetingType;
+      }
+    } catch (err) {
+      console.warn(`Failed to read meetingType from DynamoDB for ${meetingId}:`, err.message);
+    }
+  }
+
   // Send message to report queue
   await sendMessage(REPORT_QUEUE_URL, {
     meetingId,
     transcribeKey: transcribeKey || null,
     whisperKey: whisperKey || null,
+    meetingType: resolvedMeetingType || "general",
   });
 
   console.log(`Transcription complete for meeting ${meetingId}`);

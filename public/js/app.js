@@ -159,6 +159,10 @@ async function uploadFile(file) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("title", file.name.replace(/\.[^.]+$/, ""));
+  const meetingTypeSelect = document.getElementById("meetingType");
+  if (meetingTypeSelect) {
+    formData.append("meetingType", meetingTypeSelect.value);
+  }
 
   try {
     const xhr = new XMLHttpRequest();

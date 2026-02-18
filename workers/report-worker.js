@@ -3,39 +3,13 @@ const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs
 const { getFile, uploadFile } = require("../services/s3");
 const { invokeModel } = require("../services/bedrock");
 const { docClient } = require("../db/dynamodb");
-const { UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 
 const QUEUE_URL = process.env.SQS_REPORT_QUEUE;
 const EXPORT_QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
 const TABLE = process.env.DYNAMODB_TABLE;
 
 const POLL_INTERVAL = 5000;
-
-function buildPrompt(transcriptText) {
-  return `你是一个专业的会议纪要助手。请分析以下会议转录文本，生成结构化的会议纪要。
-
-转录文本：
-${transcriptText}
-
-请以 JSON 格式输出，包含以下字段：
-{
-  "summary": "会议总结（2-3句话）",
-  "highlights": [
-    { "point": "要点描述", "detail": "详情" }
-  ],
-  "lowlights": [
-    { "point": "风险/问题描述", "detail": "详情" }
-  ],
-  "actions": [
-    { "task": "任务描述", "owner": "负责人（如提及）", "deadline": "截止日期（如提及）", "priority": "high/medium/low" }
-  ],
-  "participants": ["参会人列表（如可识别）"],
-  "duration": "会议时长估计",
-  "meetingType": "会议类型（周会/项目会/评审会等）"
-}
-
-只输出 JSON，不要其他文字。`;
-}
 
 async function streamToString(stream) {
   const chunks = [];
@@ -56,17 +30,38 @@ async function readTranscript(transcribeKey, whisperKey) {
   }
 }
 
+async function getMeetingType(meetingId, messageType) {
+  // Use meetingType from SQS message if provided
+  if (messageType && messageType !== "general") {
+    return messageType;
+  }
+  // Otherwise look up from DynamoDB
+  try {
+    const { Item } = await docClient.send(new GetCommand({
+      TableName: TABLE,
+      Key: { meetingId },
+    }));
+    return (Item && Item.meetingType) || "general";
+  } catch (err) {
+    console.warn(`Failed to read meetingType from DynamoDB for ${meetingId}:`, err.message);
+    return "general";
+  }
+}
+
 async function processMessage(message) {
   const body = JSON.parse(message.Body);
   const { meetingId, transcribeKey, whisperKey } = body;
   console.log(`Generating report for meeting ${meetingId}`);
 
+  // Determine meeting type
+  const meetingType = await getMeetingType(meetingId, body.meetingType);
+  console.log(`Meeting type: ${meetingType}`);
+
   // 1. Read transcript from S3 (prefer transcribeKey, fallback to whisperKey)
   const transcriptText = await readTranscript(transcribeKey, whisperKey);
 
   // 2. Call Bedrock Claude to generate structured report
-  const prompt = buildPrompt(transcriptText);
-  const responseText = await invokeModel(prompt);
+  const responseText = await invokeModel(transcriptText, meetingType);
 
   // 3. Parse the JSON response
   const jsonMatch = responseText.match(/\{[\s\S]*\}/);

@@ -130,6 +130,7 @@ router.post("/upload", upload.single("file"), async (req, res, next) => {
     fs.unlinkSync(req.file.path);
 
     // Create meeting record in DynamoDB
+    const meetingType = req.body.meetingType || "general";
     const item = {
       meetingId,
       title: req.body.title || filename.replace(/\.[^.]+$/, ""),
@@ -137,6 +138,7 @@ router.post("/upload", upload.single("file"), async (req, res, next) => {
       status: "pending",
       s3Key,
       filename,
+      meetingType,
     };
     await docClient.send(new PutCommand({ TableName: TABLE, Item: item }));
 
@@ -145,6 +147,7 @@ router.post("/upload", upload.single("file"), async (req, res, next) => {
       meetingId,
       s3Key,
       filename,
+      meetingType,
     });
 
     res.status(201).json({ meetingId, status: "pending" });

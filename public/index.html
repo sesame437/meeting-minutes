@@ -22,6 +22,14 @@
     <!-- Upload Area -->
     <div class="card">
       <div class="card-title"><i class="fa fa-cloud-upload"></i> Upload Audio / Video</div>
+      <div class="upload-options" style="margin-bottom: 12px;">
+        <label for="meetingType" style="margin-right: 8px; font-weight: 500;">Meeting Type:</label>
+        <select name="meetingType" id="meetingType" style="padding: 6px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px;">
+          <option value="general">General</option>
+          <option value="weekly">Weekly (Business/Follow-up)</option>
+          <option value="tech">Tech Discussion</option>
+        </select>
+      </div>
       <div class="upload-area" id="upload-area">
         <input type="file" id="upload-input" accept=".mp4,.mp3,.m4a">
         <i class="fa fa-cloud-upload"></i>
