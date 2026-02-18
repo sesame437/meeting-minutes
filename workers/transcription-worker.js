@@ -281,7 +281,7 @@ async function processMessage(message) {
     try {
       const { Item } = await docClient.send(new GetCommand({
         TableName: DYNAMODB_TABLE,
-        Key: { meetingId },
+        Key: { meetingId, createdAt },
       }));
       if (Item && Item.meetingType) {
         resolvedMeetingType = Item.meetingType;
