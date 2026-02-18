@@ -76,7 +76,12 @@ ${transcriptText}
 }
 
 async function invokeModel(transcriptText, meetingType = "general", modelId = DEFAULT_MODEL_ID) {
-  const prompt = getMeetingPrompt(transcriptText, meetingType);
+  // Truncate to ~120K chars (~30K tokens) to stay within 200K context limit
+  const MAX_CHARS = 120000;
+  const truncated = transcriptText.length > MAX_CHARS
+    ? transcriptText.slice(0, MAX_CHARS) + "\n\n[注：转录文本过长，已截取前段内容进行分析]"
+    : transcriptText;
+  const prompt = getMeetingPrompt(truncated, meetingType);
 
   const resp = await bedrockClient.send(
     new InvokeModelCommand({
