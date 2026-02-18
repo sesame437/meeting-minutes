@@ -99,6 +99,7 @@ async function processMessage(message) {
   await docClient.send(new UpdateCommand({
     TableName: TABLE,
     Key: { meetingId, createdAt },
+    UpdateExpression: "SET #s = :s, reportKey = :rk, updatedAt = :u",
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: {
       ":s": "reported",
