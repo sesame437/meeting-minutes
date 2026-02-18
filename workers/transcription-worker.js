@@ -200,6 +200,12 @@ async function processMessage(message) {
   const body = JSON.parse(message.Body);
   const { meetingId, s3Key, filename, meetingType, isS3Event } = parseMessage(body);
 
+  // Skip invalid or empty messages
+  if (!s3Key) {
+    console.log(`Skipping message with no s3Key, body: ${JSON.stringify(body).slice(0, 200)}`);
+    return;
+  }
+
   // Skip .keep files
   if (s3Key.endsWith(".keep")) {
     console.log(`Skipping .keep file: ${s3Key}`);
