@@ -6,7 +6,7 @@ const {
   ListVocabulariesCommand,
 } = require("@aws-sdk/client-transcribe");
 const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
-const { UpdateCommand, PutCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, PutCommand, GetCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
 const { docClient } = require("../db/dynamodb");
 const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs");
 
@@ -212,6 +212,28 @@ async function processMessage(message) {
     return;
   }
 
+  // Dedup: check if this s3Key is already being processed (S3 events only)
+  if (isS3Event) {
+    const existing = await docClient.send(new ScanCommand({
+      TableName: DYNAMODB_TABLE,
+      FilterExpression: "s3Key = :key AND #s IN (:s1, :s2, :s3, :s4)",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":key": s3Key,
+        ":s1": "pending",
+        ":s2": "processing",
+        ":s3": "reported",
+        ":s4": "completed",
+      },
+      Limit: 1,
+    }));
+
+    if (existing.Items && existing.Items.length > 0) {
+      console.log(`[Dedup] Skipping duplicate s3Key: ${s3Key}, existing meetingId: ${existing.Items[0].meetingId}`);
+      return;
+    }
+  }
+
   // Auto-create DynamoDB record for S3 Event messages
   if (isS3Event) {
     console.log(`[S3 Event] Creating meeting record: ${meetingId} (type: ${meetingType})`);
@@ -219,7 +241,7 @@ async function processMessage(message) {
       TableName: DYNAMODB_TABLE,
       Item: {
         meetingId,
-        status: "pending",
+        status: "processing",
         filename,
         s3Key,
         meetingType,
