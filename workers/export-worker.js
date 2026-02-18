@@ -4,7 +4,7 @@ const { receiveMessages, deleteMessage } = require("../services/sqs");
 const { getFile, uploadFile } = require("../services/s3");
 const { ses } = require("../services/ses");
 const { docClient } = require("../db/dynamodb");
-const { UpdateCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 const { SendRawEmailCommand } = require("@aws-sdk/client-ses");
 
 const QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
@@ -278,21 +278,6 @@ async function sendEmailWithAttachment({ to, subject, htmlBody, pdfBuffer, pdfFi
   await ses.send(new SendRawEmailCommand({
     RawMessage: { Data: Buffer.from(raw) },
   }));
-}
-
-async function getCreatedAt(meetingId) {
-  try {
-    const result = await docClient.send(new ScanCommand({
-      TableName: TABLE,
-      FilterExpression: "meetingId = :id",
-      ExpressionAttributeValues: { ":id": meetingId },
-      Limit: 1,
-    }));
-    return result.Items?.[0]?.createdAt || new Date().toISOString();
-  } catch (e) {
-    console.warn("[export-worker] getCreatedAt failed:", e.message);
-    return new Date().toISOString();
-  }
 }
 
 /* ─── main processing ─────────────────────────────────── */

@@ -3,7 +3,7 @@ const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs
 const { getFile, uploadFile } = require("../services/s3");
 const { invokeModel } = require("../services/bedrock");
 const { docClient } = require("../db/dynamodb");
-const { UpdateCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 
 const QUEUE_URL = process.env.SQS_REPORT_QUEUE;
 const EXPORT_QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
@@ -30,35 +30,18 @@ async function readTranscript(transcribeKey, whisperKey) {
   }
 }
 
-async function getCreatedAt(meetingId) {
-  try {
-    const result = await docClient.send(new ScanCommand({
-      TableName: TABLE,
-      FilterExpression: "meetingId = :id",
-      ExpressionAttributeValues: { ":id": meetingId },
-      Limit: 1,
-    }));
-    return result.Items?.[0]?.createdAt || new Date().toISOString();
-  } catch (e) {
-    console.warn("getCreatedAt failed:", e.message);
-    return new Date().toISOString();
-  }
-}
-
-async function getMeetingType(meetingId, messageType) {
+async function getMeetingType(meetingId, createdAt, messageType) {
   // Use meetingType from SQS message if provided
   if (messageType && messageType !== "general") {
     return messageType;
   }
   // Otherwise look up from DynamoDB
   try {
-    const result = await docClient.send(new ScanCommand({
+    const { Item } = await docClient.send(new GetCommand({
       TableName: TABLE,
-      FilterExpression: "meetingId = :id",
-      ExpressionAttributeValues: { ":id": meetingId },
-      Limit: 1,
+      Key: { meetingId, createdAt },
     }));
-    return (result.Items?.[0]?.meetingType) || "general";
+    return Item?.meetingType || "general";
   } catch (err) {
     console.warn(`Failed to read meetingType from DynamoDB for ${meetingId}:`, err.message);
     return "general";
@@ -71,7 +54,7 @@ async function processMessage(message) {
   console.log(`Generating report for meeting ${meetingId}`);
 
   // Determine meeting type
-  const meetingType = await getMeetingType(meetingId, body.meetingType);
+  const meetingType = await getMeetingType(meetingId, createdAt, body.meetingType);
   console.log(`Meeting type: ${meetingType}`);
 
   // 1. Read transcript from S3 (prefer transcribeKey, fallback to whisperKey)

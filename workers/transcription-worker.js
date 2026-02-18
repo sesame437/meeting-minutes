@@ -141,7 +141,7 @@ async function runWhisper(meetingId, s3Key, filename) {
 
 // --------------- DynamoDB Update ---------------
 
-async function updateMeetingStatus(meetingId, status, extraAttrs = {}) {
+async function updateMeetingStatus(meetingId, createdAt, status, extraAttrs = {}) {
   const names = { "#s": "status", "#u": "updatedAt" };
   const values = { ":s": status, ":u": new Date().toISOString() };
   let expr = "SET #s = :s, #u = :u";
@@ -156,7 +156,7 @@ async function updateMeetingStatus(meetingId, status, extraAttrs = {}) {
 
   await docClient.send(new UpdateCommand({
     TableName: DYNAMODB_TABLE,
-    Key: { meetingId },
+    Key: { meetingId, createdAt },
     UpdateExpression: expr,
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: values,
@@ -270,7 +270,7 @@ async function processMessage(message) {
   console.log(`[Result] Transcribe: ${transcribeKey || "FAILED"}, Whisper: ${whisperKey || "SKIPPED/FAILED"}`);
 
   // Update DynamoDB meeting status
-  await updateMeetingStatus(meetingId, "transcribed", {
+  await updateMeetingStatus(meetingId, createdAt, "transcribed", {
     transcribeKey: transcribeKey || "",
     whisperKey: whisperKey || "",
   });
