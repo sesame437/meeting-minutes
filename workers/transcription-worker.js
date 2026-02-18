@@ -109,15 +109,13 @@ async function runWhisper(meetingId, s3Key, filename) {
     return null;
   }
 
-  console.log(`[Whisper] Downloading audio from S3: ${s3Key}`);
-  const audioBuffer = await downloadS3Buffer(s3Key);
-
-  // Build multipart/form-data manually using FormData
+  // Pass s3_key directly — Whisper instance downloads from S3 itself
+  // This avoids routing 617MB through the main EC2 and uses instance store cache
+  console.log(`[Whisper] Sending s3_key to ${WHISPER_URL}/asr (instance will fetch from S3)`);
   const formData = new FormData();
-  const blob = new Blob([audioBuffer], { type: "application/octet-stream" });
-  formData.append("file", blob, filename || "audio.wav");
+  formData.append("s3_key", s3Key);
+  formData.append("s3_bucket", BUCKET);
 
-  console.log(`[Whisper] Sending to ${WHISPER_URL}/asr`);
   const resp = await fetch(`${WHISPER_URL}/asr`, {
     method: "POST",
     body: formData,
