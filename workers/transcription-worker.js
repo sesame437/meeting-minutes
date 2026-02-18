@@ -6,7 +6,7 @@ const {
   ListVocabulariesCommand,
 } = require("@aws-sdk/client-transcribe");
 const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
-const { UpdateCommand, PutCommand, GetCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, PutCommand, GetCommand, QueryCommand } = require("@aws-sdk/lib-dynamodb");
 const { docClient } = require("../db/dynamodb");
 const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs");
 
@@ -219,23 +219,31 @@ async function processMessage(message) {
   }
 
   // Dedup: check if this s3Key is already being processed (S3 events only)
+  // Uses GSI (status-createdAt-index) Query + filter instead of full table Scan
   if (isS3Event) {
-    const existing = await docClient.send(new ScanCommand({
-      TableName: DYNAMODB_TABLE,
-      FilterExpression: "s3Key = :key AND #s IN (:s1, :s2, :s3, :s4)",
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: {
-        ":key": s3Key,
-        ":s1": "pending",
-        ":s2": "processing",
-        ":s3": "reported",
-        ":s4": "completed",
-      },
-      Limit: 1,
-    }));
+    const statusesToCheck = ["pending", "processing", "reported", "completed"];
+    let found = false;
+    let foundMeetingId = null;
 
-    if (existing.Items && existing.Items.length > 0) {
-      console.log(`[Dedup] Skipping duplicate s3Key: ${s3Key}, existing meetingId: ${existing.Items[0].meetingId}`);
+    for (const st of statusesToCheck) {
+      const result = await docClient.send(new QueryCommand({
+        TableName: DYNAMODB_TABLE,
+        IndexName: "status-createdAt-index",
+        KeyConditionExpression: "#s = :s",
+        FilterExpression: "s3Key = :key",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: { ":s": st, ":key": s3Key },
+        Limit: 1,
+      }));
+      if (result.Items && result.Items.length > 0) {
+        found = true;
+        foundMeetingId = result.Items[0].meetingId;
+        break;
+      }
+    }
+
+    if (found) {
+      console.log(`[Dedup] Skipping duplicate s3Key: ${s3Key}, existing meetingId: ${foundMeetingId}`);
       return;
     }
   }

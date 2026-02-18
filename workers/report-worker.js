@@ -19,6 +19,20 @@ async function streamToString(stream) {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
+function extractTranscribeText(rawJson) {
+  try {
+    const data = JSON.parse(rawJson);
+    // AWS Transcribe JSON 格式：results.transcripts[0].transcript
+    const transcript = data?.results?.transcripts?.[0]?.transcript;
+    if (transcript) return transcript;
+    // 如果解析不到，原样返回（可能已经是纯文本）
+    return rawJson;
+  } catch (e) {
+    // 不是 JSON，已经是纯文本
+    return rawJson;
+  }
+}
+
 async function readTranscript(transcribeKey, whisperKey) {
   // 注意：不能用 `await getFile(key)` 作为 allSettled 的参数——
   // await 在数组构造期就会求值，若抛错会绕过 allSettled 直接冒泡。
@@ -28,8 +42,11 @@ async function readTranscript(transcribeKey, whisperKey) {
     whisperKey ? streamToString(getFile(whisperKey)) : Promise.reject("no whisperKey"),
   ]);
 
-  const transcribeText = results[0].status === "fulfilled" ? results[0].value : null;
+  const rawTranscribeText = results[0].status === "fulfilled" ? results[0].value : null;
   const whisperText = results[1].status === "fulfilled" ? results[1].value : null;
+
+  // AWS Transcribe 返回 JSON，需要提取纯文本
+  const transcribeText = rawTranscribeText ? extractTranscribeText(rawTranscribeText) : null;
 
   if (!transcribeText && !whisperText) {
     throw new Error("Both transcription sources failed");

@@ -77,12 +77,23 @@ ${transcriptText}
 只输出 JSON，不要其他文字。`;
 }
 
+function truncateTranscript(text) {
+  const MAX_TOTAL = 120000;
+  const MAX_EACH = 60000;
+
+  // 如果是双轨合并文本，各自截断
+  if (text.includes("[AWS Transcribe 转录]") && text.includes("[Whisper 转录]")) {
+    const parts = text.split("[Whisper 转录]");
+    const transcribePart = parts[0].slice(0, MAX_EACH);
+    const whisperPart = "[Whisper 转录]" + parts[1].slice(0, MAX_EACH);
+    return transcribePart + "\n\n" + whisperPart;
+  }
+  // 单轨：整体截断
+  return text.slice(0, MAX_TOTAL);
+}
+
 async function invokeModel(transcriptText, meetingType = "general", modelId = DEFAULT_MODEL_ID) {
-  // Truncate to ~120K chars (~30K tokens) to stay within 200K context limit
-  const MAX_CHARS = 120000;
-  const truncated = transcriptText.length > MAX_CHARS
-    ? transcriptText.slice(0, MAX_CHARS) + "\n\n[注：转录文本过长，已截取前段内容进行分析]"
-    : transcriptText;
+  const truncated = truncateTranscript(transcriptText);
   const prompt = getMeetingPrompt(truncated, meetingType);
 
   const resp = await bedrockClient.send(

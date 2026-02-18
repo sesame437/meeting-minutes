@@ -66,7 +66,7 @@ function generatePdf(report) {
 
     // ── Summary
     if (report.summary) {
-      doc.fillColor("#000").fontSize(14).text("📝 Summary");
+      doc.fillColor("#000").fontSize(14).text("摘要");
       doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor("#ccc").stroke();
       doc.moveDown(0.4);
       doc.fontSize(10).text(report.summary);
@@ -75,7 +75,7 @@ function generatePdf(report) {
 
     // ── Highlights
     if (report.highlights && report.highlights.length) {
-      doc.fontSize(14).text("📌 Highlights");
+      doc.fontSize(14).text("亮点");
       doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor("#ccc").stroke();
       doc.moveDown(0.4);
       for (const h of report.highlights) {
@@ -88,7 +88,7 @@ function generatePdf(report) {
 
     // ── Lowlights
     if (report.lowlights && report.lowlights.length) {
-      doc.fontSize(14).text("⚠️ Lowlights");
+      doc.fontSize(14).text("风险");
       doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor("#ccc").stroke();
       doc.moveDown(0.4);
       for (const l of report.lowlights) {
@@ -101,7 +101,7 @@ function generatePdf(report) {
 
     // ── Follow-up Actions
     if (report.actions && report.actions.length) {
-      doc.fontSize(14).text("✅ Follow-up Actions");
+      doc.fontSize(14).text("行动项");
       doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor("#ccc").stroke();
       doc.moveDown(0.4);
       for (const a of report.actions) {
@@ -115,7 +115,7 @@ function generatePdf(report) {
 
     // ── Participants / Duration
     if (report.participants && report.participants.length) {
-      doc.fontSize(10).fillColor("#444").text(`参会人: ${report.participants.join("、")}`);
+      doc.fontSize(10).fillColor("#444").text(`参会人员: ${report.participants.join("、")}`);
     }
     if (report.duration) {
       doc.fontSize(10).fillColor("#444").text(`会议时长: ${report.duration}`);
@@ -167,7 +167,7 @@ function buildHtmlBody(report) {
   // Summary
   if (report.summary) {
     html += `<div style="${sectionStyle}">
-  <h2 style="${h2Style}">📝 Summary</h2>
+  <h2 style="${h2Style}">摘要</h2>
   <p style="line-height:1.7;color:#444;">${esc(report.summary)}</p>
 </div>`;
   }
@@ -175,7 +175,7 @@ function buildHtmlBody(report) {
   // Highlights
   if (report.highlights && report.highlights.length) {
     html += `<div style="${sectionStyle}">
-  <h2 style="${h2Style}">📌 Highlights</h2>
+  <h2 style="${h2Style}">亮点</h2>
   <ul style="padding-left:20px;margin:0;">`;
     for (const h of report.highlights) {
       html += `<li style="${liStyle}"><strong>${esc(h.point)}</strong>`;
@@ -188,7 +188,7 @@ function buildHtmlBody(report) {
   // Lowlights
   if (report.lowlights && report.lowlights.length) {
     html += `<div style="${sectionStyle}">
-  <h2 style="${h2Style}">⚠️ Lowlights</h2>
+  <h2 style="${h2Style}">风险</h2>
   <ul style="padding-left:20px;margin:0;">`;
     for (const l of report.lowlights) {
       html += `<li style="${liStyle}"><strong>${esc(l.point)}</strong>`;
@@ -205,7 +205,7 @@ function buildHtmlBody(report) {
     const priorityColor = { high: "#dc3545", medium: "#fd7e14", low: "#28a745" };
 
     html += `<div style="${sectionStyle}">
-  <h2 style="${h2Style}">✅ Follow-up Actions</h2>
+  <h2 style="${h2Style}">行动项</h2>
   <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
   <tr><th style="${thStyle}">任务</th><th style="${thStyle}">负责人</th><th style="${thStyle}">截止</th><th style="${thStyle}">优先级</th></tr>`;
     for (const a of report.actions) {
