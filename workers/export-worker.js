@@ -299,7 +299,7 @@ async function getCreatedAt(meetingId) {
 
 async function processMessage(message) {
   const body = JSON.parse(message.Body);
-  const { meetingId, reportKey } = body;
+  const { meetingId, reportKey, createdAt } = body;
   console.log(`[export-worker] Processing meeting ${meetingId}`);
 
   // 1. Read report from S3
@@ -337,7 +337,6 @@ async function processMessage(message) {
   }
 
   // 5. Update DynamoDB status to "completed"
-  const createdAt = await getCreatedAt(meetingId);
   await docClient.send(new UpdateCommand({
     TableName: TABLE,
     Key: { meetingId, createdAt },

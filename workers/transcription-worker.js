@@ -233,6 +233,7 @@ async function processMessage(message) {
   }
 
   // Auto-create DynamoDB record for S3 Event messages
+  const createdAt = new Date().toISOString();
   if (isS3Event) {
     console.log(`[S3 Event] Creating meeting record: ${meetingId} (type: ${meetingType})`);
     await docClient.send(new PutCommand({
@@ -243,7 +244,7 @@ async function processMessage(message) {
         filename,
         s3Key,
         meetingType,
-        createdAt: new Date().toISOString(),
+        createdAt,
       },
     }));
   }
@@ -296,6 +297,7 @@ async function processMessage(message) {
     transcribeKey: transcribeKey || null,
     whisperKey: whisperKey || null,
     meetingType: resolvedMeetingType || "general",
+    createdAt,
   });
 
   console.log(`Transcription complete for meeting ${meetingId}`);

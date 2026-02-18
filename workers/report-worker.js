@@ -67,11 +67,8 @@ async function getMeetingType(meetingId, messageType) {
 
 async function processMessage(message) {
   const body = JSON.parse(message.Body);
-  const { meetingId, transcribeKey, whisperKey } = body;
+  const { meetingId, transcribeKey, whisperKey, createdAt } = body;
   console.log(`Generating report for meeting ${meetingId}`);
-
-  // Get createdAt for composite key
-  const createdAt = await getCreatedAt(meetingId);
 
   // Determine meeting type
   const meetingType = await getMeetingType(meetingId, body.meetingType);
@@ -112,6 +109,7 @@ async function processMessage(message) {
   await sendMessage(EXPORT_QUEUE_URL, {
     meetingId,
     reportKey: fullReportKey,
+    createdAt,
   });
 
   console.log(`Report generated for meeting ${meetingId}`);
