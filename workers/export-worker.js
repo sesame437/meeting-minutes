@@ -45,15 +45,15 @@ function generatePdf(report) {
     doc.on("end", () => resolve(Buffer.concat(buffers)));
     doc.on("error", reject);
 
-    const FONT = "fonts/NotoSansSC-Regular.ttf";
+    const FONT = "fonts/NotoSansSC-Regular.ttc";
     let hasCustomFont = false;
     try {
       require("fs").accessSync(require("path").resolve(__dirname, "..", FONT));
-      doc.registerFont("CN", require("path").resolve(__dirname, "..", FONT));
+      // TTC index 4 = Noto Sans CJK SC Regular
+      doc.registerFont("CN", require("path").resolve(__dirname, "..", FONT), 4);
       hasCustomFont = true;
-    } catch {
-      // fallback: Helvetica (CJK may render as boxes; log warning)
-      console.warn("CJK font not found at", FONT, "– PDF will use Helvetica fallback");
+    } catch (e) {
+      console.warn("CJK font not found at", FONT, "–", e.message, "PDF will use Helvetica fallback");
     }
     const font = hasCustomFont ? "CN" : "Helvetica";
 
