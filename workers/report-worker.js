@@ -30,6 +30,20 @@ async function readTranscript(transcribeKey, whisperKey) {
   }
 }
 
+async function getCreatedAt(meetingId) {
+  try {
+    const result = await docClient.send(new (require("@aws-sdk/lib-dynamodb").QueryCommand)({
+      TableName: process.env.DYNAMODB_TABLE || "meeting-minutes-meetings",
+      KeyConditionExpression: "meetingId = :id",
+      ExpressionAttributeValues: { ":id": meetingId },
+      Limit: 1,
+    }));
+    return result.Items?.[0]?.createdAt || new Date().toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
 async function getMeetingType(meetingId, messageType) {
   // Use meetingType from SQS message if provided
   if (messageType && messageType !== "general") {
@@ -39,7 +53,7 @@ async function getMeetingType(meetingId, messageType) {
   try {
     const { Item } = await docClient.send(new GetCommand({
       TableName: TABLE,
-      Key: { meetingId },
+      Key: { meetingId, createdAt: await getCreatedAt(meetingId) },
     }));
     return (Item && Item.meetingType) || "general";
   } catch (err) {
@@ -52,6 +66,9 @@ async function processMessage(message) {
   const body = JSON.parse(message.Body);
   const { meetingId, transcribeKey, whisperKey } = body;
   console.log(`Generating report for meeting ${meetingId}`);
+
+  // Get createdAt for composite key
+  const createdAt = await getCreatedAt(meetingId);
 
   // Determine meeting type
   const meetingType = await getMeetingType(meetingId, body.meetingType);
@@ -78,8 +95,7 @@ async function processMessage(message) {
   // 5. Update DynamoDB status to "reported"
   await docClient.send(new UpdateCommand({
     TableName: TABLE,
-    Key: { meetingId },
-    UpdateExpression: "SET #s = :s, reportKey = :rk, updatedAt = :u",
+    Key: { meetingId, createdAt },
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: {
       ":s": "reported",
