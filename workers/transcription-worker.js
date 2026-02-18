@@ -6,7 +6,7 @@ const {
   ListVocabulariesCommand,
 } = require("@aws-sdk/client-transcribe");
 const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
-const { UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
 const { docClient } = require("../db/dynamodb");
 const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs");
 
@@ -165,11 +165,50 @@ async function updateMeetingStatus(meetingId, status, extraAttrs = {}) {
   }));
 }
 
+// --------------- Message Parsing ---------------
+
+function parseMessage(body) {
+  // S3 Event Notification format
+  if (body.Records && body.Records[0] && body.Records[0].s3) {
+    const s3Event = body.Records[0].s3;
+    const s3Key = decodeURIComponent(s3Event.object.key.replace(/\+/g, " "));
+    const filename = s3Key.split("/").pop();
+    const baseName = filename.replace(/\.[^.]+$/, "");
+    const meetingId = `${baseName}-${Date.now()}`;
+    return { meetingId, s3Key, filename, isS3Event: true };
+  }
+
+  // Internal format
+  return { meetingId: body.meetingId, s3Key: body.s3Key, filename: body.filename, isS3Event: false };
+}
+
 // --------------- Message Processing ---------------
 
 async function processMessage(message) {
   const body = JSON.parse(message.Body);
-  const { meetingId, s3Key, filename } = body;
+  const { meetingId, s3Key, filename, isS3Event } = parseMessage(body);
+
+  // Skip .keep files
+  if (s3Key.endsWith(".keep")) {
+    console.log(`Skipping .keep file: ${s3Key}`);
+    return;
+  }
+
+  // Auto-create DynamoDB record for S3 Event messages
+  if (isS3Event) {
+    console.log(`[S3 Event] Creating meeting record: ${meetingId}`);
+    await docClient.send(new PutCommand({
+      TableName: DYNAMODB_TABLE,
+      Item: {
+        meetingId,
+        status: "pending",
+        filename,
+        s3Key,
+        createdAt: new Date().toISOString(),
+      },
+    }));
+  }
+
   console.log(`Processing transcription for meeting ${meetingId}, audio: ${s3Key}`);
 
   // Run both tracks in parallel
