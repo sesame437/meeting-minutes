@@ -20,9 +20,12 @@ async function streamToString(stream) {
 }
 
 async function readTranscript(transcribeKey, whisperKey) {
+  // 注意：不能用 `await getFile(key)` 作为 allSettled 的参数——
+  // await 在数组构造期就会求值，若抛错会绕过 allSettled 直接冒泡。
+  // 正确做法：把 Promise 工厂（不带 await）直接传给 allSettled。
   const results = await Promise.allSettled([
-    transcribeKey ? streamToString(await getFile(transcribeKey)) : Promise.reject("no transcribeKey"),
-    whisperKey ? streamToString(await getFile(whisperKey)) : Promise.reject("no whisperKey"),
+    transcribeKey ? streamToString(getFile(transcribeKey)) : Promise.reject("no transcribeKey"),
+    whisperKey ? streamToString(getFile(whisperKey)) : Promise.reject("no whisperKey"),
   ]);
 
   const transcribeText = results[0].status === "fulfilled" ? results[0].value : null;
