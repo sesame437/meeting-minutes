@@ -3,7 +3,7 @@ const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs
 const { getFile, uploadFile } = require("../services/s3");
 const { invokeModel } = require("../services/bedrock");
 const { docClient } = require("../db/dynamodb");
-const { UpdateCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
 
 const QUEUE_URL = process.env.SQS_REPORT_QUEUE;
 const EXPORT_QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
@@ -32,14 +32,15 @@ async function readTranscript(transcribeKey, whisperKey) {
 
 async function getCreatedAt(meetingId) {
   try {
-    const result = await docClient.send(new (require("@aws-sdk/lib-dynamodb").QueryCommand)({
-      TableName: process.env.DYNAMODB_TABLE || "meeting-minutes-meetings",
-      KeyConditionExpression: "meetingId = :id",
+    const result = await docClient.send(new ScanCommand({
+      TableName: TABLE,
+      FilterExpression: "meetingId = :id",
       ExpressionAttributeValues: { ":id": meetingId },
       Limit: 1,
     }));
     return result.Items?.[0]?.createdAt || new Date().toISOString();
-  } catch {
+  } catch (e) {
+    console.warn("getCreatedAt failed:", e.message);
     return new Date().toISOString();
   }
 }
@@ -51,11 +52,13 @@ async function getMeetingType(meetingId, messageType) {
   }
   // Otherwise look up from DynamoDB
   try {
-    const { Item } = await docClient.send(new GetCommand({
+    const result = await docClient.send(new ScanCommand({
       TableName: TABLE,
-      Key: { meetingId, createdAt: await getCreatedAt(meetingId) },
+      FilterExpression: "meetingId = :id",
+      ExpressionAttributeValues: { ":id": meetingId },
+      Limit: 1,
     }));
-    return (Item && Item.meetingType) || "general";
+    return (result.Items?.[0]?.meetingType) || "general";
   } catch (err) {
     console.warn(`Failed to read meetingType from DynamoDB for ${meetingId}:`, err.message);
     return "general";
