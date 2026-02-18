@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Detail</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+</head>
+<body>
+
+  <nav class="navbar">
+    <div class="navbar-logo">Meeting Minutes</div>
+    <div class="navbar-links">
+      <a href="index.html">Meeting List</a>
+      <a href="glossary.html">Glossary</a>
+    </div>
+  </nav>
+
+  <div class="container" id="meeting-content">
+    <div class="loading">Loading...</div>
+  </div>
+
+  <div class="bottom-bar" id="bottom-bar"></div>
+
+  <script src="js/app.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      var id = getParam("id");
+      if (!id) {
+        document.getElementById("meeting-content").innerHTML =
+          '<div class="empty-state">No meeting ID specified. <a href="index.html">Back to list</a></div>';
+        return;
+      }
+      fetchMeeting(id);
+    });
+  </script>
+</body>
+</html>

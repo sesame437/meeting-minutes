@@ -1,5 +1,7 @@
 const { Router } = require("express");
 const crypto = require("crypto");
+const fs = require("fs");
+const multer = require("multer");
 const { docClient } = require("../db/dynamodb");
 const {
   ScanCommand,
@@ -8,9 +10,12 @@ const {
   UpdateCommand,
   DeleteCommand,
 } = require("@aws-sdk/lib-dynamodb");
+const { uploadFile } = require("../services/s3");
+const { sendMessage } = require("../services/sqs");
 
 const router = Router();
 const TABLE = process.env.DYNAMODB_TABLE;
+const upload = multer({ dest: "/tmp" });
 
 // List meetings
 router.get("/", async (_req, res, next) => {
@@ -102,6 +107,52 @@ router.delete("/:id", async (req, res, next) => {
     }));
     res.status(204).end();
   } catch (err) {
+    next(err);
+  }
+});
+
+// Upload file and start transcription
+router.post("/upload", upload.single("file"), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file provided" });
+    }
+
+    const meetingId = crypto.randomUUID();
+    const filename = req.file.originalname;
+    const s3Key = `inbox/${meetingId}/${filename}`;
+
+    // Upload to S3
+    const fileBuffer = fs.readFileSync(req.file.path);
+    await uploadFile(s3Key, fileBuffer, req.file.mimetype);
+
+    // Clean up temp file
+    fs.unlinkSync(req.file.path);
+
+    // Create meeting record in DynamoDB
+    const item = {
+      meetingId,
+      title: req.body.title || filename.replace(/\.[^.]+$/, ""),
+      createdAt: new Date().toISOString(),
+      status: "pending",
+      s3Key,
+      filename,
+    };
+    await docClient.send(new PutCommand({ TableName: TABLE, Item: item }));
+
+    // Send message to transcription queue
+    await sendMessage(process.env.SQS_TRANSCRIPTION_QUEUE, {
+      meetingId,
+      s3Key,
+      filename,
+    });
+
+    res.status(201).json({ meetingId, status: "pending" });
+  } catch (err) {
+    // Clean up temp file on error
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
     next(err);
   }
 });
