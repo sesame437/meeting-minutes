@@ -116,10 +116,18 @@ async function runWhisper(meetingId, s3Key, filename) {
   formData.append("s3_key", s3Key);
   formData.append("s3_bucket", BUCKET);
 
-  const resp = await fetch(`${WHISPER_URL}/asr`, {
-    method: "POST",
-    body: formData,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30 * 60 * 1000); // 30 min
+  let resp;
+  try {
+    resp = await fetch(`${WHISPER_URL}/asr`, {
+      method: "POST",
+      body: formData,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!resp.ok) {
     throw new Error(`Whisper API returned ${resp.status}: ${await resp.text()}`);

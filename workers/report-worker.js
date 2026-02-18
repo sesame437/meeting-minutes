@@ -20,14 +20,22 @@ async function streamToString(stream) {
 }
 
 async function readTranscript(transcribeKey, whisperKey) {
-  try {
-    const stream = await getFile(transcribeKey);
-    return await streamToString(stream);
-  } catch (err) {
-    console.warn(`Failed to read transcribeKey (${transcribeKey}), falling back to whisperKey`);
-    const stream = await getFile(whisperKey);
-    return await streamToString(stream);
+  const results = await Promise.allSettled([
+    transcribeKey ? streamToString(await getFile(transcribeKey)) : Promise.reject("no transcribeKey"),
+    whisperKey ? streamToString(await getFile(whisperKey)) : Promise.reject("no whisperKey"),
+  ]);
+
+  const transcribeText = results[0].status === "fulfilled" ? results[0].value : null;
+  const whisperText = results[1].status === "fulfilled" ? results[1].value : null;
+
+  if (!transcribeText && !whisperText) {
+    throw new Error("Both transcription sources failed");
   }
+
+  if (transcribeText && whisperText) {
+    return `[AWS Transcribe 转录]\n${transcribeText}\n\n[Whisper 转录]\n${whisperText}`;
+  }
+  return transcribeText || whisperText;
 }
 
 async function getMeetingType(meetingId, createdAt, messageType) {
@@ -104,8 +112,13 @@ async function poll() {
     try {
       const messages = await receiveMessages(QUEUE_URL);
       for (const msg of messages) {
-        await processMessage(msg);
-        await deleteMessage(QUEUE_URL, msg.ReceiptHandle);
+        try {
+          await processMessage(msg);
+          await deleteMessage(QUEUE_URL, msg.ReceiptHandle);
+        } catch (err) {
+          console.error(`[report-worker] Failed to process message, will retry:`, err.message);
+          // 不删除消息 → SQS visibility timeout 后自动重试
+        }
       }
     } catch (err) {
       console.error("Report worker error:", err);

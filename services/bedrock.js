@@ -10,8 +10,10 @@ const bedrockClient = new BedrockRuntimeClient({
 const DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-4-6";
 
 function getMeetingPrompt(transcriptText, meetingType) {
+  const dualTrackNote = `如果输入包含 [AWS Transcribe 转录] 和 [Whisper 转录] 两个部分，请综合两份转录的内容生成报告，互相补充和校正。\n\n`;
+
   if (meetingType === "weekly") {
-    return `你是专业会议纪要助手，请分析以下周例会转录文本，生成结构化会议纪要。
+    return `${dualTrackNote}你是专业会议纪要助手，请分析以下周例会转录文本，生成结构化会议纪要。
 
 转录文本：${transcriptText}
 
@@ -30,7 +32,7 @@ function getMeetingPrompt(transcriptText, meetingType) {
   }
 
   if (meetingType === "tech") {
-    return `你是专业技术会议纪要助手，请分析以下技术讨论会转录文本，生成结构化技术会议纪要。
+    return `${dualTrackNote}你是专业技术会议纪要助手，请分析以下技术讨论会转录文本，生成结构化技术会议纪要。
 
 转录文本：${transcriptText}
 
@@ -50,7 +52,7 @@ function getMeetingPrompt(transcriptText, meetingType) {
   }
 
   // general (default)
-  return `你是一个专业的会议纪要助手。请分析以下会议转录文本，生成结构化的会议纪要。
+  return `${dualTrackNote}你是一个专业的会议纪要助手。请分析以下会议转录文本，生成结构化的会议纪要。
 
 转录文本：
 ${transcriptText}
