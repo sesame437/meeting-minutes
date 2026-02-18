@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs");
 const { getFile, uploadFile } = require("../services/s3");
+const { invokeModel } = require("../services/bedrock");
 const { docClient } = require("../db/dynamodb");
 const { UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 
@@ -8,49 +9,94 @@ const QUEUE_URL = process.env.SQS_REPORT_QUEUE;
 const EXPORT_QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
 const TABLE = process.env.DYNAMODB_TABLE;
 
+const POLL_INTERVAL = 5000;
+
+function buildPrompt(transcriptText) {
+  return `你是一个专业的会议纪要助手。请分析以下会议转录文本，生成结构化的会议纪要。
+
+转录文本：
+${transcriptText}
+
+请以 JSON 格式输出，包含以下字段：
+{
+  "summary": "会议总结（2-3句话）",
+  "highlights": [
+    { "point": "要点描述", "detail": "详情" }
+  ],
+  "lowlights": [
+    { "point": "风险/问题描述", "detail": "详情" }
+  ],
+  "actions": [
+    { "task": "任务描述", "owner": "负责人（如提及）", "deadline": "截止日期（如提及）", "priority": "high/medium/low" }
+  ],
+  "participants": ["参会人列表（如可识别）"],
+  "duration": "会议时长估计",
+  "meetingType": "会议类型（周会/项目会/评审会等）"
+}
+
+只输出 JSON，不要其他文字。`;
+}
+
+async function streamToString(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+async function readTranscript(transcribeKey, whisperKey) {
+  try {
+    const stream = await getFile(transcribeKey);
+    return await streamToString(stream);
+  } catch (err) {
+    console.warn(`Failed to read transcribeKey (${transcribeKey}), falling back to whisperKey`);
+    const stream = await getFile(whisperKey);
+    return await streamToString(stream);
+  }
+}
+
 async function processMessage(message) {
   const body = JSON.parse(message.Body);
-  const { meetingId, transcriptKey } = body;
+  const { meetingId, transcribeKey, whisperKey } = body;
   console.log(`Generating report for meeting ${meetingId}`);
 
-  // TODO: Read transcript from S3
-  // const transcriptStream = await getFile(transcriptKey);
-  // const transcriptText = await streamToString(transcriptStream);
+  // 1. Read transcript from S3 (prefer transcribeKey, fallback to whisperKey)
+  const transcriptText = await readTranscript(transcribeKey, whisperKey);
 
-  // TODO: Call Bedrock Claude to generate structured meeting minutes
-  // const bedrockClient = new BedrockRuntimeClient({ region: process.env.AWS_REGION });
-  // const response = await bedrockClient.send(new InvokeModelCommand({
-  //   modelId: "anthropic.claude-3-sonnet-20240229-v1:0",
-  //   contentType: "application/json",
-  //   body: JSON.stringify({
-  //     anthropic_version: "bedrock-2023-05-31",
-  //     messages: [{ role: "user", content: `Generate structured meeting minutes with Highlights, Lowlights, Actions, and Summary from: ${transcriptText}` }],
-  //     max_tokens: 4096,
-  //   }),
-  // }));
+  // 2. Call Bedrock Claude to generate structured report
+  const prompt = buildPrompt(transcriptText);
+  const responseText = await invokeModel(prompt);
 
-  // TODO: Parse Bedrock response and extract structured report
+  // 3. Parse the JSON response
+  const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error(`Failed to parse report JSON from Bedrock response for meeting ${meetingId}`);
+  }
+  const report = JSON.parse(jsonMatch[0]);
 
-  // TODO: Upload report to S3 reports/ prefix
-  // await uploadFile(`reports/${meetingId}.json`, JSON.stringify(report), "application/json");
+  // 4. Upload report to S3
+  const reportKey = `reports/${meetingId}/report.json`;
+  await uploadFile(reportKey, JSON.stringify(report, null, 2), "application/json");
+  const fullReportKey = `${process.env.S3_PREFIX}/${reportKey}`;
 
-  // TODO: Update DynamoDB with report content and status
-  // await docClient.send(new UpdateCommand({
-  //   TableName: TABLE,
-  //   Key: { meetingId },
-  //   UpdateExpression: "SET #s = :s, report = :r, updatedAt = :u",
-  //   ExpressionAttributeNames: { "#s": "status" },
-  //   ExpressionAttributeValues: {
-  //     ":s": "report_generated",
-  //     ":r": report,
-  //     ":u": new Date().toISOString(),
-  //   },
-  // }));
+  // 5. Update DynamoDB status to "reported"
+  await docClient.send(new UpdateCommand({
+    TableName: TABLE,
+    Key: { meetingId },
+    UpdateExpression: "SET #s = :s, reportKey = :rk, updatedAt = :u",
+    ExpressionAttributeNames: { "#s": "status" },
+    ExpressionAttributeValues: {
+      ":s": "reported",
+      ":rk": fullReportKey,
+      ":u": new Date().toISOString(),
+    },
+  }));
 
-  // Send message to export queue
+  // 6. Send message to export queue
   await sendMessage(EXPORT_QUEUE_URL, {
     meetingId,
-    reportKey: `${process.env.S3_PREFIX}/reports/${meetingId}.json`,
+    reportKey: fullReportKey,
   });
 
   console.log(`Report generated for meeting ${meetingId}`);
@@ -68,6 +114,7 @@ async function poll() {
     } catch (err) {
       console.error("Report worker error:", err);
     }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
   }
 }
 
