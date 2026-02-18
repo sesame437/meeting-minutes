@@ -1,36 +1,215 @@
 require("dotenv").config();
+const {
+  TranscribeClient,
+  StartTranscriptionJobCommand,
+  GetTranscriptionJobCommand,
+  ListVocabulariesCommand,
+} = require("@aws-sdk/client-transcribe");
+const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { docClient } = require("../db/dynamodb");
 const { receiveMessages, deleteMessage, sendMessage } = require("../services/sqs");
-const { getFile } = require("../services/s3");
 
 const QUEUE_URL = process.env.SQS_TRANSCRIPTION_QUEUE;
 const REPORT_QUEUE_URL = process.env.SQS_REPORT_QUEUE;
+const BUCKET = process.env.S3_BUCKET;
+const PREFIX = process.env.S3_PREFIX || "meeting-minutes";
+const REGION = process.env.AWS_REGION;
+const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE || "meeting-minutes-meetings";
+const WHISPER_URL = process.env.WHISPER_URL || "http://localhost:9000";
+const POLL_INTERVAL = 5000; // 5 seconds between SQS polls
+
+const transcribeClient = new TranscribeClient({ region: REGION });
+const s3 = new S3Client({ region: REGION });
+
+// --------------- AWS Transcribe (Track 1) ---------------
+
+async function checkVocabularyExists(vocabName) {
+  try {
+    const resp = await transcribeClient.send(new ListVocabulariesCommand({
+      NameContains: vocabName,
+    }));
+    return (resp.Vocabularies || []).some((v) => v.VocabularyName === vocabName);
+  } catch {
+    return false;
+  }
+}
+
+async function runAWSTranscribe(meetingId, s3Key) {
+  const jobName = `${meetingId}-transcribe`;
+  const outputKey = `${PREFIX}/transcripts/${meetingId}/transcribe.json`;
+  const mediaUri = `s3://${BUCKET}/${s3Key}`;
+
+  const params = {
+    TranscriptionJobName: jobName,
+    LanguageCode: "zh-CN",
+    Media: { MediaFileUri: mediaUri },
+    OutputBucketName: BUCKET,
+    OutputKey: outputKey,
+  };
+
+  // Use custom vocabulary if available
+  const hasVocab = await checkVocabularyExists("meeting-minutes-glossary");
+  if (hasVocab) {
+    params.Settings = { VocabularyName: "meeting-minutes-glossary" };
+    console.log(`[Transcribe] Using custom vocabulary: meeting-minutes-glossary`);
+  }
+
+  console.log(`[Transcribe] Starting job: ${jobName}`);
+  await transcribeClient.send(new StartTranscriptionJobCommand(params));
+
+  // Poll until complete (every 10s, max 30 minutes)
+  const maxAttempts = 180; // 30 min / 10s
+  for (let i = 0; i < maxAttempts; i++) {
+    await sleep(10000);
+    const resp = await transcribeClient.send(new GetTranscriptionJobCommand({
+      TranscriptionJobName: jobName,
+    }));
+    const status = resp.TranscriptionJob.TranscriptionJobStatus;
+    console.log(`[Transcribe] Job ${jobName} status: ${status} (attempt ${i + 1})`);
+
+    if (status === "COMPLETED") {
+      return outputKey;
+    }
+    if (status === "FAILED") {
+      const reason = resp.TranscriptionJob.FailureReason;
+      throw new Error(`Transcribe job failed: ${reason}`);
+    }
+  }
+  throw new Error(`Transcribe job timed out after 30 minutes`);
+}
+
+// --------------- Whisper HTTP API (Track 2) ---------------
+
+async function isWhisperAvailable() {
+  try {
+    const resp = await fetch(`${WHISPER_URL}/health`, { signal: AbortSignal.timeout(5000) });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function downloadS3Buffer(key) {
+  const resp = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  const chunks = [];
+  for await (const chunk of resp.Body) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function runWhisper(meetingId, s3Key, filename) {
+  const outputKey = `${PREFIX}/transcripts/${meetingId}/whisper.json`;
+
+  // Check Whisper service availability
+  const available = await isWhisperAvailable();
+  if (!available) {
+    console.warn(`[Whisper] Service not available at ${WHISPER_URL}, skipping Whisper track`);
+    return null;
+  }
+
+  console.log(`[Whisper] Downloading audio from S3: ${s3Key}`);
+  const audioBuffer = await downloadS3Buffer(s3Key);
+
+  // Build multipart/form-data manually using FormData
+  const formData = new FormData();
+  const blob = new Blob([audioBuffer], { type: "application/octet-stream" });
+  formData.append("file", blob, filename || "audio.wav");
+
+  console.log(`[Whisper] Sending to ${WHISPER_URL}/asr`);
+  const resp = await fetch(`${WHISPER_URL}/asr`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Whisper API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  const result = await resp.json();
+  console.log(`[Whisper] Transcription done, language: ${result.language}`);
+
+  // Upload result to S3
+  await s3.send(new PutObjectCommand({
+    Bucket: BUCKET,
+    Key: outputKey,
+    Body: JSON.stringify(result, null, 2),
+    ContentType: "application/json",
+  }));
+
+  return outputKey;
+}
+
+// --------------- DynamoDB Update ---------------
+
+async function updateMeetingStatus(meetingId, status, extraAttrs = {}) {
+  const names = { "#s": "status", "#u": "updatedAt" };
+  const values = { ":s": status, ":u": new Date().toISOString() };
+  let expr = "SET #s = :s, #u = :u";
+
+  for (const [k, v] of Object.entries(extraAttrs)) {
+    const nameKey = `#${k}`;
+    const valKey = `:${k}`;
+    names[nameKey] = k;
+    values[valKey] = v;
+    expr += `, ${nameKey} = ${valKey}`;
+  }
+
+  await docClient.send(new UpdateCommand({
+    TableName: DYNAMODB_TABLE,
+    Key: { meetingId },
+    UpdateExpression: expr,
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: values,
+  }));
+}
+
+// --------------- Message Processing ---------------
 
 async function processMessage(message) {
   const body = JSON.parse(message.Body);
-  const { meetingId, audioKey } = body;
-  console.log(`Processing transcription for meeting ${meetingId}, audio: ${audioKey}`);
+  const { meetingId, s3Key, filename } = body;
+  console.log(`Processing transcription for meeting ${meetingId}, audio: ${s3Key}`);
 
-  // TODO: Call AWS Transcribe StartTranscriptionJob with the S3 audio file
-  // const transcribeClient = new TranscribeClient({ region: process.env.AWS_REGION });
-  // await transcribeClient.send(new StartTranscriptionJobCommand({
-  //   TranscriptionJobName: `mm-${meetingId}-${Date.now()}`,
-  //   LanguageCode: "en-US",
-  //   Media: { MediaFileUri: `s3://${process.env.S3_BUCKET}/${audioKey}` },
-  //   OutputBucketName: process.env.S3_BUCKET,
-  //   OutputKey: `${process.env.S3_PREFIX}/transcripts/${meetingId}.json`,
-  // }));
+  // Run both tracks in parallel
+  const [transcribeKey, whisperKey] = await Promise.all([
+    runAWSTranscribe(meetingId, s3Key).catch((err) => {
+      console.error(`[Transcribe] Failed:`, err.message);
+      return null;
+    }),
+    runWhisper(meetingId, s3Key, filename).catch((err) => {
+      console.error(`[Whisper] Failed:`, err.message);
+      return null;
+    }),
+  ]);
 
-  // TODO: Poll GetTranscriptionJob until status is COMPLETED or FAILED
+  if (!transcribeKey && !whisperKey) {
+    throw new Error(`Both transcription tracks failed for meeting ${meetingId}`);
+  }
 
-  // TODO: Upload transcript result to S3 transcripts/ prefix
+  console.log(`[Result] Transcribe: ${transcribeKey || "FAILED"}, Whisper: ${whisperKey || "SKIPPED/FAILED"}`);
 
-  // Send message to report queue for next stage
+  // Update DynamoDB meeting status
+  await updateMeetingStatus(meetingId, "transcribed", {
+    transcribeKey: transcribeKey || "",
+    whisperKey: whisperKey || "",
+  });
+
+  // Send message to report queue
   await sendMessage(REPORT_QUEUE_URL, {
     meetingId,
-    transcriptKey: `${process.env.S3_PREFIX}/transcripts/${meetingId}.json`,
+    transcribeKey: transcribeKey || null,
+    whisperKey: whisperKey || null,
   });
 
   console.log(`Transcription complete for meeting ${meetingId}`);
+}
+
+// --------------- Polling Loop ---------------
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function poll() {
@@ -38,13 +217,20 @@ async function poll() {
   while (true) {
     try {
       const messages = await receiveMessages(QUEUE_URL);
-      for (const msg of messages) {
-        await processMessage(msg);
-        await deleteMessage(QUEUE_URL, msg.ReceiptHandle);
+      if (messages.length > 0) {
+        for (const msg of messages) {
+          try {
+            await processMessage(msg);
+            await deleteMessage(QUEUE_URL, msg.ReceiptHandle);
+          } catch (err) {
+            console.error(`Failed to process message:`, err);
+          }
+        }
       }
     } catch (err) {
       console.error("Transcription worker error:", err);
     }
+    await sleep(POLL_INTERVAL);
   }
 }
 
