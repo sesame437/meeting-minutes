@@ -83,9 +83,10 @@ function truncateTranscript(text) {
 
   // 如果是双轨合并文本，各自截断
   if (text.includes("[AWS Transcribe 转录]") && text.includes("[Whisper 转录]")) {
-    const parts = text.split("[Whisper 转录]");
+    const WHISPER_LABEL = "[Whisper 转录]";
+    const parts = text.split(WHISPER_LABEL);
     const transcribePart = parts[0].slice(0, MAX_EACH);
-    const whisperPart = "[Whisper 转录]" + parts[1].slice(0, MAX_EACH);
+    const whisperPart = WHISPER_LABEL + parts[1].slice(0, MAX_EACH - WHISPER_LABEL.length);
     return transcribePart + "\n\n" + whisperPart;
   }
   // 单轨：整体截断

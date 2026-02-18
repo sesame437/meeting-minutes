@@ -778,14 +778,16 @@ describe("Suite 5 — Batch 1 修复专项测试", () => {
     expect(reportWorkerSource).not.toMatch(/ScanCommand/);
   });
 
-  test("5k. transcription-worker 中 ScanCommand 仅用于去重（s3Key 查询），不用于精确 ID 查询", () => {
+  test("5k. transcription-worker 中使用 QueryCommand（GSI）而非 ScanCommand 进行去重", () => {
     const transcriptionWorkerSource = require("fs").readFileSync(
       require("path").resolve(__dirname, "..", "workers", "transcription-worker.js"),
       "utf8"
     );
-    // ScanCommand 应存在（用于去重）
-    expect(transcriptionWorkerSource).toMatch(/ScanCommand/);
-    // 但不应用于 meetingId 精确查询（已改为 GetCommand）
+    // Batch 3 已将 ScanCommand 改为 QueryCommand（GSI status-createdAt-index）
+    expect(transcriptionWorkerSource).toMatch(/QueryCommand/);
+    // ScanCommand 已被移除
+    expect(transcriptionWorkerSource).not.toMatch(/ScanCommand/);
+    // GSI 去重：s3Key 通过 FilterExpression 内存过滤，不在 KeyConditionExpression 中
     expect(transcriptionWorkerSource).not.toMatch(/FilterExpression.*meetingId.*=.*:id/);
   });
 });
