@@ -7,7 +7,8 @@
     "start": "node server.js",
     "worker:transcription": "node workers/transcription-worker.js",
     "worker:report": "node workers/report-worker.js",
-    "worker:export": "node workers/export-worker.js"
+    "worker:export": "node workers/export-worker.js",
+    "test": "jest"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.700.0",
@@ -23,5 +24,8 @@
     "helmet": "^8.0.0",
     "multer": "^2.0.2",
     "pdfkit": "^0.15.0"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0"
   }
 }
