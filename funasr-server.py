@@ -33,11 +33,18 @@ DEFAULT_BUCKET = os.environ.get("S3_BUCKET", "yc-projects-012289836917")
 CACHE_DIR = "/opt/dlami/nvme/funasr-cache"
 CACHE_TTL_SECONDS = 24 * 3600  # 24 hours
 IDLE_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
-MODEL_PATH = "/opt/funasr-models/damo/speech_paraformer-large-vad-punc-spk_asr_nat-zh-cn"
+MODEL_PATH = os.environ.get("FUNASR_MODEL_PATH", "/opt/funasr-models/damo/speech_paraformer-large-vad-punc-spk_asr_nat-zh-cn")
+DEVICE = os.environ.get("FUNASR_DEVICE", "cuda")
+BATCH_SIZE_S = int(os.environ.get("FUNASR_BATCH_SIZE_S", "60"))
+ENABLE_IDLE_SHUTDOWN = os.environ.get("ENABLE_IDLE_SHUTDOWN", "false").lower() == "true"
 
 # --------------- Global State ---------------
 
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+# --------------- S3 Singleton ---------------
+
+s3_client = boto3.client("s3", region_name=REGION)
 
 _last_activity = time.time()
 _activity_lock = threading.Lock()
@@ -56,7 +63,7 @@ from funasr import AutoModel  # noqa: E402 (import after logging setup)
 
 model = AutoModel(
     model=MODEL_PATH,
-    device="cuda",
+    device=DEVICE,
     disable_update=True,
 )
 logger.info("FunASR model loaded successfully.")
@@ -93,6 +100,8 @@ cleanup_thread.start()
 
 def idle_shutdown():
     """Background thread: shutdown the instance after IDLE_TIMEOUT_SECONDS of inactivity."""
+    if not ENABLE_IDLE_SHUTDOWN:
+        return
     while True:
         time.sleep(60)
         with _activity_lock:
@@ -129,8 +138,7 @@ def download_from_s3(s3_bucket: str, s3_key: str) -> tuple[str, bool]:
         return local_path, True
 
     logger.info(f"Downloading s3://{s3_bucket}/{s3_key} -> {local_path}")
-    s3 = boto3.client("s3", region_name=REGION)
-    s3.download_file(s3_bucket, s3_key, local_path)
+    s3_client.download_file(s3_bucket, s3_key, local_path)
     logger.info(f"Download complete: {os.path.getsize(local_path)} bytes")
     return local_path, False
 
@@ -167,8 +175,10 @@ def parse_funasr_result(res: list) -> dict:
         # Timestamps: FunASR returns [[start_ms, end_ms], ...] per token
         timestamps = item.get("timestamp") or []
         if timestamps:
-            start_sec = round(timestamps[0][0] / 1000.0, 3)
-            end_sec = round(timestamps[-1][1] / 1000.0, 3)
+            t_first = timestamps[0]
+            t_last = timestamps[-1]
+            start_sec = round(t_first[0] / 1000.0, 3)
+            end_sec = round((t_last[1] if len(t_last) > 1 else t_last[0]) / 1000.0, 3)
         else:
             start_sec = 0.0
             end_sec = 0.0
@@ -247,8 +257,7 @@ def asr():
         logger.info(f"Transcribing: {audio_path} (language={language})")
         generate_kwargs = dict(
             input=audio_path,
-            batch_size_s=300,
-            hotword="",
+            batch_size_s=BATCH_SIZE_S,
         )
         # FunASR AutoModel may accept a language hint; pass only when not 'auto'
         if language and language != "auto":
