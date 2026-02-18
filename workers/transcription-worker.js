@@ -174,7 +174,7 @@ function parseMessage(body) {
     const s3Key = decodeURIComponent(s3Event.object.key.replace(/\+/g, " "));
     const filename = s3Key.split("/").pop();
     const baseName = filename.replace(/\.[^.]+$/, "");
-    const meetingId = `${baseName}-${Date.now()}`;
+    const meetingId = `meeting-${Date.now()}`;
     return { meetingId, s3Key, filename, isS3Event: true };
   }
 
