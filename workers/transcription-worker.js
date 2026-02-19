@@ -18,6 +18,9 @@ const REGION = process.env.AWS_REGION;
 const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE || "meeting-minutes-meetings";
 const WHISPER_URL = process.env.WHISPER_URL || "http://localhost:9000";
 const FUNASR_URL = process.env.FUNASR_URL || "";  // 空字符串表示未配置
+const ENABLE_TRANSCRIBE = process.env.ENABLE_TRANSCRIBE === "true";  // 默认关闭
+const ENABLE_WHISPER = process.env.ENABLE_WHISPER === "true";        // 默认关闭
+const ENABLE_FUNASR = FUNASR_URL ? true : false;                     // URL 存在则开启
 const POLL_INTERVAL = 5000; // 5 seconds between SQS polls
 
 const transcribeClient = new TranscribeClient({ region: REGION });
@@ -334,21 +337,19 @@ async function processMessage(message) {
   }
 
   console.log(`Processing transcription for meeting ${meetingId}, audio: ${s3Key}`);
+  console.log(`[Pipeline] Tracks enabled — Transcribe: ${ENABLE_TRANSCRIBE}, Whisper: ${ENABLE_WHISPER}, FunASR: ${ENABLE_FUNASR}`);
 
-  // Run all three tracks in parallel
+  // Run enabled tracks in parallel
   const [transcribeKey, whisperKey, funasrKey] = await Promise.all([
-    runAWSTranscribe(meetingId, s3Key).catch((err) => {
-      console.error(`[Transcribe] Failed:`, err.message);
-      return null;
-    }),
-    runWhisper(meetingId, s3Key, filename).catch((err) => {
-      console.error(`[Whisper] Failed:`, err.message);
-      return null;
-    }),
-    runFunASR(meetingId, s3Key).catch((err) => {
-      console.error(`[FunASR] Failed:`, err.message);
-      return null;
-    }),
+    ENABLE_TRANSCRIBE
+      ? runAWSTranscribe(meetingId, s3Key).catch((err) => { console.error(`[Transcribe] Failed:`, err.message); return null; })
+      : Promise.resolve(null),
+    ENABLE_WHISPER
+      ? runWhisper(meetingId, s3Key, filename).catch((err) => { console.error(`[Whisper] Failed:`, err.message); return null; })
+      : Promise.resolve(null),
+    ENABLE_FUNASR
+      ? runFunASR(meetingId, s3Key).catch((err) => { console.error(`[FunASR] Failed:`, err.message); return null; })
+      : Promise.resolve(null),
   ]);
 
   if (!transcribeKey && !whisperKey && !funasrKey) {
