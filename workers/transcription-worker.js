@@ -336,6 +336,9 @@ async function processMessage(message) {
     }));
   }
 
+  // Update stage to "transcribing"
+  await updateMeetingStatus(meetingId, createdAt, "processing", { stage: "transcribing" });
+
   console.log(`Processing transcription for meeting ${meetingId}, audio: ${s3Key}`);
   console.log(`[Pipeline] Tracks enabled — Transcribe: ${ENABLE_TRANSCRIBE}, Whisper: ${ENABLE_WHISPER}, FunASR: ${ENABLE_FUNASR}`);
 
@@ -358,11 +361,12 @@ async function processMessage(message) {
 
   console.log(`[Result] Transcribe: ${transcribeKey || "FAILED"}, Whisper: ${whisperKey || "SKIPPED"}, FunASR: ${funasrKey || "SKIPPED"}`);
 
-  // Update DynamoDB meeting status
+  // Update DynamoDB meeting status, advance stage to "reporting"
   await updateMeetingStatus(meetingId, createdAt, "transcribed", {
     transcribeKey: transcribeKey || "",
     whisperKey: whisperKey || "",
     funasrKey: funasrKey || "",
+    stage: "reporting",
   });
 
   // Resolve meetingType: use parsed value, or look up from DynamoDB

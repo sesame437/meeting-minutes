@@ -164,6 +164,16 @@ router.post("/upload", (req, res, next) => {
     // Clean up temp file
     fs.unlinkSync(req.file.path);
 
+    // Parse and validate recipient emails
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    let recipientEmails = [];
+    if (req.body.recipientEmails) {
+      recipientEmails = req.body.recipientEmails
+        .split(",")
+        .map(e => e.trim())
+        .filter(e => emailRegex.test(e));
+    }
+
     // Create meeting record in DynamoDB
     const meetingType = req.body.meetingType || "general";
     const item = {
@@ -174,6 +184,7 @@ router.post("/upload", (req, res, next) => {
       s3Key,
       filename,
       meetingType,
+      ...(recipientEmails.length ? { recipientEmails } : {}),
     };
     await docClient.send(new PutCommand({ TableName: TABLE, Item: item }));
 

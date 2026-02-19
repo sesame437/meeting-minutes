@@ -151,13 +151,20 @@ function meetingCard(m) {
   const status = m.status || "pending";
   const id     = m.meetingId;
 
+  // Stage description for active jobs
+  const stage = m.stage || "";
+  const stageLabels = { transcribing: "转录中…", generating: "生成报告中…", sending: "发送邮件中…" };
+  const stageText = (status === "processing" || status === "pending" || status === "transcribed" || status === "reported")
+    ? (stageLabels[stage] || "")
+    : "";
+
   return `
   <div class="meeting-card-item">
     <div class="item-title">
       <a href="meeting.html?id=${encodeURIComponent(id)}">${title}</a>
     </div>
     <div class="item-time">${time}</div>
-    <div>${statusBadge(status)}</div>
+    <div>${statusBadge(status)}${stageText ? `<div style="font-size:12px;color:#879596;margin-top:4px;">${stageText}</div>` : ""}</div>
     <div class="item-actions">
       <a href="meeting.html?id=${encodeURIComponent(id)}" class="btn btn-outline btn-sm"><i class="fa fa-eye"></i> View</a>
       <button class="btn btn-danger btn-sm" onclick="deleteMeeting('${id}')"><i class="fa fa-trash"></i></button>
@@ -248,6 +255,12 @@ async function uploadFile(file) {
   const meetingType  = radioChecked ? radioChecked.value : (selectEl ? selectEl.value : "general");
   formData.append("meetingType", meetingType);
 
+  // Recipient emails
+  const recipientInput = document.getElementById("recipientEmails");
+  if (recipientInput && recipientInput.value.trim()) {
+    formData.append("recipientEmails", recipientInput.value.trim());
+  }
+
   try {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/meetings/upload");
@@ -318,6 +331,41 @@ function renderMeetingDetail(m) {
   const summary     = report.summary     || report.executive_summary || "No summary available yet.";
   const duration    = report.duration    || m.duration || "-";
 
+  // ---- Pipeline Stage Indicator ----
+  const stage = m.stage || "";
+  let stageHtml = "";
+  if (status !== "completed" && status !== "failed" && status !== "created") {
+    const steps = [
+      { key: "transcribing", label: "转录中" },
+      { key: "generating",   label: "生成报告" },
+      { key: "sending",      label: "发送邮件" },
+    ];
+    const stageOrder = { transcribing: 0, reporting: 0, generating: 1, exporting: 1, sending: 2, done: 3 };
+    const currentIdx = stageOrder[stage] !== undefined ? stageOrder[stage] : -1;
+    const isFailed = status === "failed";
+
+    stageHtml = `<div style="display:flex;align-items:center;gap:0;margin:16px 0 8px;padding:16px 20px;background:#f8f9fa;border-radius:8px;">`;
+    steps.forEach((step, i) => {
+      const isActive = i === currentIdx;
+      const isDone = i < currentIdx || stage === "done";
+      let color = "#879596"; // pending grey
+      let icon = "○";
+      let weight = "400";
+      if (isDone) { color = "#2e7d32"; icon = "✓"; weight = "600"; }
+      else if (isActive && isFailed) { color = "#d32f2f"; icon = "✕"; weight = "700"; }
+      else if (isActive) { color = "#FF9900"; icon = "●"; weight = "700"; }
+      stageHtml += `<div style="display:flex;align-items:center;gap:6px;">
+        <span style="color:${color};font-size:16px;font-weight:${weight};">${icon}</span>
+        <span style="color:${color};font-size:13px;font-weight:${weight};">${step.label}</span>
+      </div>`;
+      if (i < steps.length - 1) {
+        const lineColor = isDone ? "#2e7d32" : "#ddd";
+        stageHtml += `<div style="flex:1;height:2px;background:${lineColor};margin:0 12px;"></div>`;
+      }
+    });
+    stageHtml += `</div>`;
+  }
+
   // ---- Header (Cloudscape style) ----
   let html = `
     <div class="meeting-detail-header">
@@ -326,6 +374,7 @@ function renderMeetingDetail(m) {
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         ${statusBadge(status)}
       </div>
+      ${stageHtml}
     </div>
 
     <div class="meeting-meta-bar">

@@ -152,6 +152,14 @@ async function processMessage(message) {
   const { meetingId, transcribeKey, whisperKey, createdAt } = body;
   console.log(`Generating report for meeting ${meetingId}`);
 
+  // Update stage to "generating"
+  await docClient.send(new UpdateCommand({
+    TableName: TABLE,
+    Key: { meetingId, createdAt },
+    UpdateExpression: "SET stage = :stage, updatedAt = :u",
+    ExpressionAttributeValues: { ":stage": "generating", ":u": new Date().toISOString() },
+  }));
+
   // Determine meeting type
   const meetingType = await getMeetingType(meetingId, createdAt, body.meetingType);
   console.log(`Meeting type: ${meetingType}`);
@@ -202,16 +210,17 @@ async function processMessage(message) {
   await uploadFile(reportKey, JSON.stringify(report, null, 2), "application/json");
   const fullReportKey = `${process.env.S3_PREFIX}/${reportKey}`;
 
-  // 5. Update DynamoDB status to "reported"
+  // 5. Update DynamoDB status to "reported", advance stage to "exporting"
   await docClient.send(new UpdateCommand({
     TableName: TABLE,
     Key: { meetingId, createdAt },
-    UpdateExpression: "SET #s = :s, reportKey = :rk, updatedAt = :u",
+    UpdateExpression: "SET #s = :s, reportKey = :rk, updatedAt = :u, stage = :stage",
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: {
       ":s": "reported",
       ":rk": fullReportKey,
       ":u": new Date().toISOString(),
+      ":stage": "exporting",
     },
   }));
 

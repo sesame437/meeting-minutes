@@ -3,7 +3,7 @@ const { receiveMessages, deleteMessage } = require("../services/sqs");
 const { getFile } = require("../services/s3");
 const { ses } = require("../services/ses");
 const { docClient } = require("../db/dynamodb");
-const { UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
 
 const QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
@@ -341,6 +341,14 @@ async function processMessage(message) {
   const { meetingId, reportKey, createdAt } = body;
   console.log(`[export-worker] Processing meeting ${meetingId}`);
 
+  // Update stage to "sending"
+  await docClient.send(new UpdateCommand({
+    TableName: TABLE,
+    Key: { meetingId, createdAt },
+    UpdateExpression: "SET stage = :stage, updatedAt = :u",
+    ExpressionAttributeValues: { ":stage": "sending", ":u": nowISO() },
+  }));
+
   // 1. Read report from S3
   const reportStream = await getFile(reportKey);
   const report = JSON.parse(await streamToString(reportStream));
@@ -352,24 +360,54 @@ async function processMessage(message) {
   const subject = `【会议纪要】${meetingType} - ${date}`;
   const htmlBody = buildHtmlBody(report, body.meetingName || meetingId);
 
-  const toEmail = process.env.SES_TO_EMAIL;
-  if (toEmail) {
-    await sendEmail({ to: toEmail, subject, htmlBody });
-    console.log(`[export-worker] Email sent to ${toEmail}`);
-  } else {
-    console.warn("[export-worker] SES_TO_EMAIL not set, skipping email");
+  // Resolve recipient emails: check DynamoDB for custom recipients
+  const defaultTo = process.env.SES_TO_EMAIL;
+  let recipientEmails = [];
+  try {
+    const { Item } = await docClient.send(new GetCommand({
+      TableName: TABLE,
+      Key: { meetingId, createdAt },
+      ProjectionExpression: "recipientEmails",
+    }));
+    if (Item && Item.recipientEmails && Item.recipientEmails.length) {
+      recipientEmails = Item.recipientEmails;
+    }
+  } catch (err) {
+    console.warn(`[export-worker] Failed to read recipientEmails: ${err.message}`);
   }
 
-  // 3. Update DynamoDB status to "completed"
+  if (recipientEmails.length) {
+    // Send to custom recipients, BCC default
+    const toAddresses = recipientEmails;
+    const from = process.env.SES_FROM_EMAIL;
+    const bcc = defaultTo ? [defaultTo] : [];
+    await ses.send(new SendEmailCommand({
+      Source: from,
+      Destination: { ToAddresses: toAddresses, BccAddresses: bcc },
+      Message: {
+        Subject: { Data: subject, Charset: "UTF-8" },
+        Body: { Html: { Data: htmlBody, Charset: "UTF-8" } },
+      },
+    }));
+    console.log(`[export-worker] Email sent to ${toAddresses.join(", ")} (BCC: ${defaultTo || "none"})`);
+  } else if (defaultTo) {
+    await sendEmail({ to: defaultTo, subject, htmlBody });
+    console.log(`[export-worker] Email sent to ${defaultTo}`);
+  } else {
+    console.warn("[export-worker] SES_TO_EMAIL not set and no recipientEmails, skipping email");
+  }
+
+  // 3. Update DynamoDB status to "completed", stage to "done"
   await docClient.send(new UpdateCommand({
     TableName: TABLE,
     Key: { meetingId, createdAt },
-    UpdateExpression: "SET #s = :s, exportedAt = :ea, updatedAt = :u",
+    UpdateExpression: "SET #s = :s, exportedAt = :ea, updatedAt = :u, stage = :stage",
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: {
       ":s": "completed",
       ":ea": nowISO(),
       ":u": nowISO(),
+      ":stage": "done",
     },
   }));
   console.log(`[export-worker] Meeting ${meetingId} marked as completed`);
