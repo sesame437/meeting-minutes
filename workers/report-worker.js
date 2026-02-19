@@ -123,18 +123,38 @@ async function processMessage(message) {
   const meetingType = await getMeetingType(meetingId, createdAt, body.meetingType);
   console.log(`Meeting type: ${meetingType}`);
 
-  // 1. Read transcript from S3 (prefer transcribeKey, fallback to whisperKey)
-  let transcriptText = await readTranscript(transcribeKey, whisperKey);
+  // 1. Read transcript — try Transcribe/Whisper first, then FunASR
+  let transcriptText = null;
+
+  if (transcribeKey || whisperKey) {
+    try {
+      transcriptText = await readTranscript(transcribeKey, whisperKey);
+    } catch (err) {
+      console.warn("[report] Transcribe/Whisper unavailable, will use FunASR only:", err.message);
+    }
+  }
 
   // 加入 FunASR 转录（含说话人标签）
   const funasrText = await readFunASRResult(body.funasrKey);
-  if (funasrText) {
-    const truncated = funasrText.slice(0, 60000);
-    transcriptText = `${transcriptText}\n\n[FunASR 转录（含说话人标签）]\n${truncated}`;
+
+  // 至少需要一个转录来源
+  if (!transcriptText && !funasrText) {
+    throw new Error("All transcription sources failed (Transcribe, Whisper, FunASR)");
   }
 
+  // 拼装最终转录内容
+  const transcriptParts = [];
+  if (transcriptText) {
+    transcriptParts.push(transcriptText);
+  }
+  if (funasrText) {
+    const truncated = funasrText.slice(0, 60000);
+    transcriptParts.push(`[FunASR 转录（含说话人标签）]\n${truncated}`);
+  }
+  const finalTranscript = transcriptParts.join("\n\n");
+
   // 2. Call Bedrock Claude to generate structured report
-  const responseText = await invokeModel(transcriptText, meetingType);
+  const responseText = await invokeModel(finalTranscript, meetingType);
 
   // 3. Parse the JSON response
   const jsonMatch = responseText.match(/\{[\s\S]*\}/);
