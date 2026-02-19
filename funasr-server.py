@@ -143,6 +143,48 @@ def download_from_s3(s3_bucket: str, s3_key: str) -> tuple[str, bool]:
     return local_path, False
 
 
+# --------------- Audio Chunking ---------------
+
+CHUNK_DURATION_S = int(os.environ.get("FUNASR_CHUNK_DURATION_S", "300"))  # 5分钟一片
+
+
+def chunk_audio(audio_path: str, chunk_duration: int = CHUNK_DURATION_S) -> list:
+    """用 ffmpeg 把音频切成固定长度片段，返回片段路径列表"""
+    import subprocess
+
+    # 获取总时长
+    probe = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", audio_path],
+        capture_output=True, text=True
+    )
+    import json as _json
+    duration = float(_json.loads(probe.stdout)["format"]["duration"])
+
+    if duration <= chunk_duration:
+        return [audio_path]  # 短于阈值，不切片
+
+    chunks = []
+    chunk_dir = audio_path + "_chunks"
+    os.makedirs(chunk_dir, exist_ok=True)
+
+    start = 0
+    idx = 0
+    while start < duration:
+        chunk_path = os.path.join(chunk_dir, f"chunk_{idx:04d}.wav")
+        subprocess.run([
+            "ffmpeg", "-y", "-i", audio_path,
+            "-ss", str(start), "-t", str(chunk_duration),
+            "-ar", "16000", "-ac", "1",  # 16kHz mono（FunASR 标准格式）
+            chunk_path
+        ], capture_output=True)
+        chunks.append(chunk_path)
+        start += chunk_duration
+        idx += 1
+
+    logger.info(f"Split audio into {len(chunks)} chunks of {chunk_duration}s")
+    return chunks
+
+
 # --------------- Result Parsing ---------------
 
 
@@ -255,47 +297,116 @@ def asr():
 
         # --- Transcribe ---
         logger.info(f"Transcribing: {audio_path} (language={language})")
-        generate_kwargs = dict(
-            input=audio_path,
+        generate_kwargs_base = dict(
             batch_size_s=BATCH_SIZE_S,
             batch_size_threshold_s=int(os.environ.get("FUNASR_BATCH_THRESHOLD_S", "60")),
         )
         # FunASR AutoModel may accept a language hint; pass only when not 'auto'
         if language and language != "auto":
-            generate_kwargs["language"] = language
+            generate_kwargs_base["language"] = language
 
-        try:
-            res = model.generate(**generate_kwargs)
-        except (RuntimeError, Exception) as e:
-            if "out of memory" in str(e).lower():
-                import torch
-                logger.warning("CUDA OOM, retrying with batch_size_s=5")
-                torch.cuda.empty_cache()
-                generate_kwargs["batch_size_s"] = 5
-                res = model.generate(**generate_kwargs)
-            else:
-                raise
-        logger.info(f"Raw FunASR output: {len(res)} chunk(s)")
+        import torch
 
-        # --- Parse result ---
-        parsed = parse_funasr_result(res)
+        # 切片处理
+        chunks = chunk_audio(audio_path)
+        all_segments = []
+        time_offset = 0.0
+
+        for i, chunk_path in enumerate(chunks):
+            logger.info(f"Processing chunk {i+1}/{len(chunks)}: {chunk_path}")
+            torch.cuda.empty_cache()
+
+            chunk_kwargs = dict(
+                input=chunk_path,
+                **generate_kwargs_base,
+            )
+            try:
+                chunk_res = model.generate(**chunk_kwargs)
+            except (RuntimeError, Exception) as e:
+                if "out of memory" in str(e).lower():
+                    logger.warning(f"OOM on chunk {i+1}, retrying with batch_size_s=5")
+                    torch.cuda.empty_cache()
+                    chunk_kwargs["batch_size_s"] = 5
+                    chunk_res = model.generate(**chunk_kwargs)
+                else:
+                    raise
+
+            # 解析 chunk 结果，时间戳加上 offset
+            for item in chunk_res:
+                timestamps = item.get("timestamp") or []
+                text_content = item.get("text", "").strip()
+                if not text_content:
+                    continue
+
+                if timestamps:
+                    t0 = timestamps[0]
+                    t_last = timestamps[-1]
+                    start_sec = round(t0[0] / 1000.0 + time_offset, 3)
+                    end_sec = round((t_last[1] if len(t_last) > 1 else t_last[0]) / 1000.0 + time_offset, 3)
+                else:
+                    start_sec = round(time_offset, 3)
+                    end_sec = round(time_offset + 1.0, 3)
+
+                spk_raw = item.get("spk_id") or item.get("spk") or "SPEAKER_0"
+                # 说话人 ID 加 chunk 偏移前缀，后续合并时需要归一化
+                speaker = f"SPK_{spk_raw}"
+
+                all_segments.append({
+                    "start": start_sec,
+                    "end": end_sec,
+                    "text": text_content,
+                    "speaker": speaker,
+                })
+
+            # 更新时间偏移（用实际 chunk 时长）
+            import subprocess as _sp
+            import json as _json2
+            probe2 = _sp.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", chunk_path],
+                capture_output=True, text=True
+            )
+            try:
+                chunk_actual_dur = float(_json2.loads(probe2.stdout)["format"]["duration"])
+            except Exception:
+                chunk_actual_dur = CHUNK_DURATION_S
+            time_offset += chunk_actual_dur
+
+        # 清理临时片段目录
+        if len(chunks) > 1:
+            import shutil
+            chunk_dir = chunks[0].rsplit("/", 1)[0]
+            shutil.rmtree(chunk_dir, ignore_errors=True)
+
+        # 合并说话人 ID（跨片段归一化：按出现顺序映射为 SPEAKER_0/1/2...）
+        seen_speakers = {}
+        spk_counter = 0
+        for seg in all_segments:
+            raw = seg["speaker"]
+            if raw not in seen_speakers:
+                seen_speakers[raw] = f"SPEAKER_{spk_counter}"
+                spk_counter += 1
+            seg["speaker"] = seen_speakers[raw]
+
+        segments = all_segments
+        full_text = "".join(seg["text"] for seg in segments)
+        unique_speakers = sorted(set(seg["speaker"] for seg in segments))
+
+        logger.info(f"Raw FunASR output: {len(chunks)} chunk(s) -> {len(segments)} segment(s)")
 
         # --- Detect language from result (FunASR may include it) ---
         detected_lang = language
-        if res and isinstance(res[0], dict):
-            detected_lang = res[0].get("lang") or res[0].get("language") or language
 
         response_body = {
-            "text": parsed["text"],
-            "segments": parsed["segments"],
+            "text": full_text,
+            "segments": segments,
             "language": detected_lang,
-            "speakers": parsed["speakers"],
-            "speaker_count": parsed["speaker_count"],
+            "speakers": unique_speakers,
+            "speaker_count": len(unique_speakers),
             "cached": cached,
         }
         logger.info(
-            f"Done: {len(parsed['segments'])} segments, "
-            f"{parsed['speaker_count']} speaker(s), "
+            f"Done: {len(segments)} segments, "
+            f"{len(unique_speakers)} speaker(s), "
             f"lang={detected_lang}"
         )
         return jsonify(response_body)
