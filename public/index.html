@@ -60,6 +60,19 @@
     <!-- Meeting List -->
     <div class="card">
       <div class="card-title"><i class="fa fa-list"></i> Meeting List</div>
+      <div class="meeting-filter-bar" id="filter-bar">
+        <div class="filter-tabs">
+          <button class="filter-tab active" data-filter="all">全部</button>
+          <button class="filter-tab" data-filter="general">通用</button>
+          <button class="filter-tab" data-filter="weekly">周会</button>
+          <button class="filter-tab" data-filter="tech">技术</button>
+          <button class="filter-tab" data-filter="customer">客户</button>
+        </div>
+        <div class="filter-search">
+          <i class="fa fa-search" style="color:#879596;"></i>
+          <input type="text" id="meeting-search" placeholder="搜索会议名称…">
+        </div>
+      </div>
       <div class="meeting-card-list" id="meetings-list">
         <div class="loading">Loading...</div>
       </div>
@@ -74,6 +87,7 @@
 
     document.addEventListener("DOMContentLoaded", function() {
       initUpload();
+      initFilter();
       fetchMeetings();
     });
   </script>

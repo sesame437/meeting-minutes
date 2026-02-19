@@ -206,4 +206,43 @@ router.post("/upload", (req, res, next) => {
   }
 });
 
+// Retry failed meeting
+router.post("/:id/retry", async (req, res, next) => {
+  try {
+    const { Item } = await docClient.send(new GetCommand({
+      TableName: TABLE,
+      Key: { meetingId: req.params.id },
+    }));
+    if (!Item) return res.status(404).json({ error: "Not found" });
+    if (Item.status !== "failed") {
+      return res.status(400).json({ error: "Only failed meetings can be retried" });
+    }
+
+    // Reset status and send back to transcription queue
+    const updateExpr = "SET #s = :s, stage = :stage, updatedAt = :u REMOVE errorMessage";
+    await docClient.send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { meetingId: req.params.id },
+      UpdateExpression: updateExpr,
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":s": "processing",
+        ":stage": "transcribing",
+        ":u": new Date().toISOString(),
+      },
+    }));
+
+    await sendMessage(process.env.SQS_TRANSCRIPTION_QUEUE, {
+      meetingId: Item.meetingId,
+      s3Key: Item.s3Key,
+      filename: Item.filename,
+      meetingType: Item.meetingType || "general",
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

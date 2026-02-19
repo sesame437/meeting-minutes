@@ -160,78 +160,95 @@ async function processMessage(message) {
     ExpressionAttributeValues: { ":stage": "generating", ":u": new Date().toISOString() },
   }));
 
-  // Determine meeting type
-  const meetingType = await getMeetingType(meetingId, createdAt, body.meetingType);
-  console.log(`Meeting type: ${meetingType}`);
+  try {
+    // Determine meeting type
+    const meetingType = await getMeetingType(meetingId, createdAt, body.meetingType);
+    console.log(`Meeting type: ${meetingType}`);
 
-  // 1. Read transcript — try Transcribe/Whisper first, then FunASR
-  let transcriptText = null;
+    // 1. Read transcript — try Transcribe/Whisper first, then FunASR
+    let transcriptText = null;
 
-  if (transcribeKey || whisperKey) {
-    try {
-      transcriptText = await readTranscript(transcribeKey, whisperKey);
-    } catch (err) {
-      console.warn("[report] Transcribe/Whisper unavailable, will use FunASR only:", err.message);
+    if (transcribeKey || whisperKey) {
+      try {
+        transcriptText = await readTranscript(transcribeKey, whisperKey);
+      } catch (err) {
+        console.warn("[report] Transcribe/Whisper unavailable, will use FunASR only:", err.message);
+      }
     }
+
+    // 加入 FunASR 转录（含说话人标签）
+    const funasrText = await readFunASRResult(body.funasrKey);
+
+    // 至少需要一个转录来源
+    if (!transcriptText && !funasrText) {
+      throw new Error("All transcription sources failed (Transcribe, Whisper, FunASR)");
+    }
+
+    // 拼装最终转录内容
+    const transcriptParts = [];
+    if (transcriptText) {
+      transcriptParts.push(transcriptText);
+    }
+    if (funasrText) {
+      const truncated = funasrText.slice(0, 60000);
+      transcriptParts.push(`[FunASR 转录（含说话人标签）]\n${truncated}`);
+    }
+    const finalTranscript = transcriptParts.join("\n\n");
+
+    // 2. Fetch glossary terms and call Bedrock Claude to generate structured report
+    const glossaryTerms = await fetchGlossaryTerms();
+    const responseText = await invokeModel(finalTranscript, meetingType, glossaryTerms);
+
+    // 3. Parse the JSON response
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error(`Failed to parse report JSON from Bedrock response for meeting ${meetingId}`);
+    }
+    const report = JSON.parse(jsonMatch[0]);
+
+    // 4. Upload report to S3
+    const reportKey = `reports/${meetingId}/report.json`;
+    await uploadFile(reportKey, JSON.stringify(report, null, 2), "application/json");
+    const fullReportKey = `${process.env.S3_PREFIX}/${reportKey}`;
+
+    // 5. Update DynamoDB status to "reported", advance stage to "exporting"
+    await docClient.send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { meetingId, createdAt },
+      UpdateExpression: "SET #s = :s, reportKey = :rk, updatedAt = :u, stage = :stage",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":s": "reported",
+        ":rk": fullReportKey,
+        ":u": new Date().toISOString(),
+        ":stage": "exporting",
+      },
+    }));
+
+    // 6. Send message to export queue
+    await sendMessage(EXPORT_QUEUE_URL, {
+      meetingId,
+      reportKey: fullReportKey,
+      createdAt,
+    });
+
+    console.log(`Report generated for meeting ${meetingId}`);
+  } catch (err) {
+    console.error(`[report-worker] Failed for meeting ${meetingId}:`, err.message);
+    await docClient.send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { meetingId, createdAt },
+      UpdateExpression: "SET #s = :s, errorMessage = :em, stage = :stage, updatedAt = :u",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":s": "failed",
+        ":em": err.message,
+        ":stage": "failed",
+        ":u": new Date().toISOString(),
+      },
+    }));
+    throw err;
   }
-
-  // 加入 FunASR 转录（含说话人标签）
-  const funasrText = await readFunASRResult(body.funasrKey);
-
-  // 至少需要一个转录来源
-  if (!transcriptText && !funasrText) {
-    throw new Error("All transcription sources failed (Transcribe, Whisper, FunASR)");
-  }
-
-  // 拼装最终转录内容
-  const transcriptParts = [];
-  if (transcriptText) {
-    transcriptParts.push(transcriptText);
-  }
-  if (funasrText) {
-    const truncated = funasrText.slice(0, 60000);
-    transcriptParts.push(`[FunASR 转录（含说话人标签）]\n${truncated}`);
-  }
-  const finalTranscript = transcriptParts.join("\n\n");
-
-  // 2. Fetch glossary terms and call Bedrock Claude to generate structured report
-  const glossaryTerms = await fetchGlossaryTerms();
-  const responseText = await invokeModel(finalTranscript, meetingType, glossaryTerms);
-
-  // 3. Parse the JSON response
-  const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`Failed to parse report JSON from Bedrock response for meeting ${meetingId}`);
-  }
-  const report = JSON.parse(jsonMatch[0]);
-
-  // 4. Upload report to S3
-  const reportKey = `reports/${meetingId}/report.json`;
-  await uploadFile(reportKey, JSON.stringify(report, null, 2), "application/json");
-  const fullReportKey = `${process.env.S3_PREFIX}/${reportKey}`;
-
-  // 5. Update DynamoDB status to "reported", advance stage to "exporting"
-  await docClient.send(new UpdateCommand({
-    TableName: TABLE,
-    Key: { meetingId, createdAt },
-    UpdateExpression: "SET #s = :s, reportKey = :rk, updatedAt = :u, stage = :stage",
-    ExpressionAttributeNames: { "#s": "status" },
-    ExpressionAttributeValues: {
-      ":s": "reported",
-      ":rk": fullReportKey,
-      ":u": new Date().toISOString(),
-      ":stage": "exporting",
-    },
-  }));
-
-  // 6. Send message to export queue
-  await sendMessage(EXPORT_QUEUE_URL, {
-    meetingId,
-    reportKey: fullReportKey,
-    createdAt,
-  });
-
-  console.log(`Report generated for meeting ${meetingId}`);
 }
 
 async function poll() {

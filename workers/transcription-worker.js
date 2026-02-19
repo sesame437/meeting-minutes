@@ -339,63 +339,72 @@ async function processMessage(message) {
   // Update stage to "transcribing"
   await updateMeetingStatus(meetingId, createdAt, "processing", { stage: "transcribing" });
 
-  console.log(`Processing transcription for meeting ${meetingId}, audio: ${s3Key}`);
-  console.log(`[Pipeline] Tracks enabled — Transcribe: ${ENABLE_TRANSCRIBE}, Whisper: ${ENABLE_WHISPER}, FunASR: ${ENABLE_FUNASR}`);
+  try {
+    console.log(`Processing transcription for meeting ${meetingId}, audio: ${s3Key}`);
+    console.log(`[Pipeline] Tracks enabled — Transcribe: ${ENABLE_TRANSCRIBE}, Whisper: ${ENABLE_WHISPER}, FunASR: ${ENABLE_FUNASR}`);
 
-  // Run enabled tracks in parallel
-  const [transcribeKey, whisperKey, funasrKey] = await Promise.all([
-    ENABLE_TRANSCRIBE
-      ? runAWSTranscribe(meetingId, s3Key).catch((err) => { console.error(`[Transcribe] Failed:`, err.message); return null; })
-      : Promise.resolve(null),
-    ENABLE_WHISPER
-      ? runWhisper(meetingId, s3Key, filename).catch((err) => { console.error(`[Whisper] Failed:`, err.message); return null; })
-      : Promise.resolve(null),
-    ENABLE_FUNASR
-      ? runFunASR(meetingId, s3Key).catch((err) => { console.error(`[FunASR] Failed:`, err.message); return null; })
-      : Promise.resolve(null),
-  ]);
+    // Run enabled tracks in parallel
+    const [transcribeKey, whisperKey, funasrKey] = await Promise.all([
+      ENABLE_TRANSCRIBE
+        ? runAWSTranscribe(meetingId, s3Key).catch((err) => { console.error(`[Transcribe] Failed:`, err.message); return null; })
+        : Promise.resolve(null),
+      ENABLE_WHISPER
+        ? runWhisper(meetingId, s3Key, filename).catch((err) => { console.error(`[Whisper] Failed:`, err.message); return null; })
+        : Promise.resolve(null),
+      ENABLE_FUNASR
+        ? runFunASR(meetingId, s3Key).catch((err) => { console.error(`[FunASR] Failed:`, err.message); return null; })
+        : Promise.resolve(null),
+    ]);
 
-  if (!transcribeKey && !whisperKey && !funasrKey) {
-    throw new Error("All transcription tracks failed");
-  }
-
-  console.log(`[Result] Transcribe: ${transcribeKey || "FAILED"}, Whisper: ${whisperKey || "SKIPPED"}, FunASR: ${funasrKey || "SKIPPED"}`);
-
-  // Update DynamoDB meeting status, advance stage to "reporting"
-  await updateMeetingStatus(meetingId, createdAt, "transcribed", {
-    transcribeKey: transcribeKey || "",
-    whisperKey: whisperKey || "",
-    funasrKey: funasrKey || "",
-    stage: "reporting",
-  });
-
-  // Resolve meetingType: use parsed value, or look up from DynamoDB
-  let resolvedMeetingType = meetingType;
-  if (!resolvedMeetingType || resolvedMeetingType === "general") {
-    try {
-      const { Item } = await docClient.send(new GetCommand({
-        TableName: DYNAMODB_TABLE,
-        Key: { meetingId, createdAt },
-      }));
-      if (Item && Item.meetingType) {
-        resolvedMeetingType = Item.meetingType;
-      }
-    } catch (err) {
-      console.warn(`Failed to read meetingType from DynamoDB for ${meetingId}:`, err.message);
+    if (!transcribeKey && !whisperKey && !funasrKey) {
+      throw new Error("All transcription tracks failed");
     }
+
+    console.log(`[Result] Transcribe: ${transcribeKey || "FAILED"}, Whisper: ${whisperKey || "SKIPPED"}, FunASR: ${funasrKey || "SKIPPED"}`);
+
+    // Update DynamoDB meeting status, advance stage to "reporting"
+    await updateMeetingStatus(meetingId, createdAt, "transcribed", {
+      transcribeKey: transcribeKey || "",
+      whisperKey: whisperKey || "",
+      funasrKey: funasrKey || "",
+      stage: "reporting",
+    });
+
+    // Resolve meetingType: use parsed value, or look up from DynamoDB
+    let resolvedMeetingType = meetingType;
+    if (!resolvedMeetingType || resolvedMeetingType === "general") {
+      try {
+        const { Item } = await docClient.send(new GetCommand({
+          TableName: DYNAMODB_TABLE,
+          Key: { meetingId, createdAt },
+        }));
+        if (Item && Item.meetingType) {
+          resolvedMeetingType = Item.meetingType;
+        }
+      } catch (err) {
+        console.warn(`Failed to read meetingType from DynamoDB for ${meetingId}:`, err.message);
+      }
+    }
+
+    // Send message to report queue
+    await sendMessage(REPORT_QUEUE_URL, {
+      meetingId,
+      transcribeKey: transcribeKey || null,
+      whisperKey: whisperKey || null,
+      funasrKey: funasrKey || null,
+      meetingType: resolvedMeetingType || "general",
+      createdAt,
+    });
+
+    console.log(`Transcription complete for meeting ${meetingId}`);
+  } catch (err) {
+    console.error(`[transcription-worker] Failed for meeting ${meetingId}:`, err.message);
+    await updateMeetingStatus(meetingId, createdAt, "failed", {
+      errorMessage: err.message,
+      stage: "failed",
+    });
+    throw err;
   }
-
-  // Send message to report queue
-  await sendMessage(REPORT_QUEUE_URL, {
-    meetingId,
-    transcribeKey: transcribeKey || null,
-    whisperKey: whisperKey || null,
-    funasrKey: funasrKey || null,
-    meetingType: resolvedMeetingType || "general",
-    createdAt,
-  });
-
-  console.log(`Transcription complete for meeting ${meetingId}`);
 }
 
 // --------------- Polling Loop ---------------

@@ -87,6 +87,70 @@ function showSyncIndicator(show) {
   el.style.display = show ? 'block' : 'none';
 }
 
+/* ===== Meeting Filter State ===== */
+let allMeetings = [];
+let filterType = 'all';
+let searchQuery = '';
+let _searchDebounceTimer = null;
+
+function initFilter() {
+  const tabs = document.querySelectorAll('.filter-tab');
+  const searchInput = document.getElementById('meeting-search');
+  if (!tabs.length) return;
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      filterType = tab.dataset.filter;
+      renderFilteredMeetings();
+    });
+  });
+
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      clearTimeout(_searchDebounceTimer);
+      _searchDebounceTimer = setTimeout(() => {
+        searchQuery = searchInput.value.trim().toLowerCase();
+        renderFilteredMeetings();
+      }, 300);
+    });
+  }
+}
+
+function renderFilteredMeetings() {
+  const list = document.getElementById("meetings-list");
+  const tbody = document.getElementById("meetings-tbody");
+  const target = list || tbody;
+  if (!target) return;
+
+  let filtered = allMeetings;
+  if (filterType !== 'all') {
+    filtered = filtered.filter(m => m.meetingType === filterType);
+  }
+  if (searchQuery) {
+    filtered = filtered.filter(m => {
+      const title = (m.title || m.meetingId || '').toLowerCase();
+      return title.includes(searchQuery);
+    });
+  }
+
+  if (filtered.length === 0) {
+    if (list) {
+      list.innerHTML = '<div class="empty-state">没有找到匹配的会议</div>';
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">没有找到匹配的会议</td></tr>';
+    }
+    return;
+  }
+
+  if (list) {
+    list.innerHTML = filtered.map(m => meetingCard(m)).join("");
+  } else {
+    tbody.innerHTML = filtered.map(m => meetingRow(m)).join("");
+  }
+}
+
 /* ===== Meetings List ===== */
 async function fetchMeetings() {
   const list = document.getElementById("meetings-list");
@@ -95,15 +159,19 @@ async function fetchMeetings() {
   const target = list || tbody;
   if (!target) return;
 
-  if (list) {
-    list.innerHTML = '<div class="loading">Loading...</div>';
-  } else {
-    tbody.innerHTML = '<tr><td colspan="4" class="loading">Loading...</td></tr>';
+  // Only show loading on first load (when allMeetings is empty)
+  if (allMeetings.length === 0) {
+    if (list) {
+      list.innerHTML = '<div class="loading">Loading...</div>';
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="loading">Loading...</td></tr>';
+    }
   }
 
   try {
     const meetings = await API.get("/api/meetings");
     if (!meetings || meetings.length === 0) {
+      allMeetings = [];
       if (list) {
         list.innerHTML = '<div class="empty-state"><i class="fa fa-inbox"></i><br>No meetings yet. Upload an audio/video file above.</div>';
       } else {
@@ -113,11 +181,8 @@ async function fetchMeetings() {
       return;
     }
     meetings.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-    if (list) {
-      list.innerHTML = meetings.map(m => meetingCard(m)).join("");
-    } else {
-      tbody.innerHTML = meetings.map(m => meetingRow(m)).join("");
-    }
+    allMeetings = meetings;
+    renderFilteredMeetings();
     // Auto-polling: keep polling while any job is active
     if (hasActiveJobs(meetings)) {
       startPolling();
@@ -158,15 +223,24 @@ function meetingCard(m) {
     ? (stageLabels[stage] || "")
     : "";
 
+  // Failed state: show error message and retry button
+  const errorMsg = (status === "failed" && m.errorMessage)
+    ? `<div style="font-size:12px;color:#d32f2f;margin-top:4px;">${escapeHtml(m.errorMessage.length > 50 ? m.errorMessage.slice(0, 50) + '…' : m.errorMessage)}</div>`
+    : "";
+  const retryBtn = status === "failed"
+    ? `<button class="btn btn-sm" style="border:1px solid #FF9900;color:#FF9900;background:transparent;margin-left:8px;" onclick="retryMeeting('${id}')">🔄 重试</button>`
+    : "";
+
   return `
   <div class="meeting-card-item">
     <div class="item-title">
       <a href="meeting.html?id=${encodeURIComponent(id)}">${title}</a>
     </div>
     <div class="item-time">${time}</div>
-    <div>${statusBadge(status)}${stageText ? `<div style="font-size:12px;color:#879596;margin-top:4px;">${stageText}</div>` : ""}</div>
+    <div>${statusBadge(status)}${stageText ? `<div style="font-size:12px;color:#879596;margin-top:4px;">${stageText}</div>` : ""}${errorMsg}</div>
     <div class="item-actions">
       <a href="meeting.html?id=${encodeURIComponent(id)}" class="btn btn-outline btn-sm"><i class="fa fa-eye"></i> View</a>
+      ${retryBtn}
       <button class="btn btn-danger btn-sm" onclick="deleteMeeting('${id}')"><i class="fa fa-trash"></i></button>
     </div>
   </div>`;
@@ -189,6 +263,15 @@ function meetingRow(m) {
       </div>
     </td>
   </tr>`;
+}
+
+async function retryMeeting(id) {
+  try {
+    await API.post(`/api/meetings/${id}/retry`);
+    Toast.success("已重新提交处理");
+    fetchMeetings();
+    startPolling();
+  } catch (_) { /* error already shown by API */ }
 }
 
 async function deleteMeeting(id) {
@@ -334,25 +417,28 @@ function renderMeetingDetail(m) {
   // ---- Pipeline Stage Indicator ----
   const stage = m.stage || "";
   let stageHtml = "";
-  if (status !== "completed" && status !== "failed" && status !== "created") {
+  if (status !== "completed" && status !== "created") {
     const steps = [
       { key: "transcribing", label: "转录中" },
       { key: "generating",   label: "生成报告" },
       { key: "sending",      label: "发送邮件" },
     ];
-    const stageOrder = { transcribing: 0, reporting: 0, generating: 1, exporting: 1, sending: 2, done: 3 };
+    const stageOrder = { transcribing: 0, reporting: 0, generating: 1, exporting: 1, sending: 2, done: 3, failed: -1 };
     const currentIdx = stageOrder[stage] !== undefined ? stageOrder[stage] : -1;
     const isFailed = status === "failed";
 
+    // For failed state, determine which step failed based on stage
+    const failedIdx = isFailed ? (stageOrder[m.stage] !== undefined && m.stage !== "failed" ? stageOrder[m.stage] : 0) : -1;
+
     stageHtml = `<div style="display:flex;align-items:center;gap:0;margin:16px 0 8px;padding:16px 20px;background:#f8f9fa;border-radius:8px;">`;
     steps.forEach((step, i) => {
-      const isActive = i === currentIdx;
-      const isDone = i < currentIdx || stage === "done";
+      const isActive = isFailed ? (i === failedIdx) : (i === currentIdx);
+      const isDone = !isFailed && (i < currentIdx || stage === "done");
       let color = "#879596"; // pending grey
       let icon = "○";
       let weight = "400";
       if (isDone) { color = "#2e7d32"; icon = "✓"; weight = "600"; }
-      else if (isActive && isFailed) { color = "#d32f2f"; icon = "✕"; weight = "700"; }
+      else if (isActive && isFailed) { color = "#d32f2f"; icon = "✗"; weight = "700"; }
       else if (isActive) { color = "#FF9900"; icon = "●"; weight = "700"; }
       stageHtml += `<div style="display:flex;align-items:center;gap:6px;">
         <span style="color:${color};font-size:16px;font-weight:${weight};">${icon}</span>
@@ -364,6 +450,15 @@ function renderMeetingDetail(m) {
       }
     });
     stageHtml += `</div>`;
+
+    // Failed error card
+    if (isFailed) {
+      stageHtml += `<div style="background:#ffebee;border:1px solid #ffcdd2;border-radius:8px;padding:16px 20px;margin:8px 0 16px;">
+        <div style="font-size:15px;font-weight:700;color:#c62828;margin-bottom:8px;">❌ 处理失败</div>
+        <div style="font-size:13px;color:#d32f2f;margin-bottom:12px;">错误信息：${escapeHtml(m.errorMessage || "未知错误")}</div>
+        <button class="btn" style="border:1px solid #FF9900;color:#FF9900;background:transparent;font-size:13px;padding:6px 16px;border-radius:4px;cursor:pointer;" onclick="retryMeetingDetail('${m.meetingId}')">🔄 重试</button>
+      </div>`;
+    }
   }
 
   // ---- Header (Cloudscape style) ----
@@ -725,6 +820,19 @@ function renderMeetingDetail(m) {
       </div>
     `;
   }
+}
+
+async function retryMeetingDetail(id) {
+  try {
+    await API.post(`/api/meetings/${id}/retry`);
+    Toast.success("已重新提交处理");
+    fetchMeeting(id);
+    startPolling();
+    // Poll meeting detail
+    if (!window._detailPollingTimer) {
+      window._detailPollingTimer = setInterval(() => fetchMeeting(id), 12000);
+    }
+  } catch (_) { /* error already shown by API */ }
 }
 
 function sendEmail(id) {
