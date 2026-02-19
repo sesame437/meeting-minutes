@@ -35,7 +35,7 @@ CACHE_TTL_SECONDS = 24 * 3600  # 24 hours
 IDLE_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
 MODEL_PATH = os.environ.get("FUNASR_MODEL_PATH", "/opt/funasr-models/damo/speech_paraformer-large-vad-punc-spk_asr_nat-zh-cn")
 DEVICE = os.environ.get("FUNASR_DEVICE", "cuda")
-BATCH_SIZE_S = int(os.environ.get("FUNASR_BATCH_SIZE_S", "60"))
+BATCH_SIZE_S = int(os.environ.get("FUNASR_BATCH_SIZE_S", "10"))
 ENABLE_IDLE_SHUTDOWN = os.environ.get("ENABLE_IDLE_SHUTDOWN", "false").lower() == "true"
 
 # --------------- Global State ---------------
@@ -258,12 +258,23 @@ def asr():
         generate_kwargs = dict(
             input=audio_path,
             batch_size_s=BATCH_SIZE_S,
+            batch_size_threshold_s=int(os.environ.get("FUNASR_BATCH_THRESHOLD_S", "60")),
         )
         # FunASR AutoModel may accept a language hint; pass only when not 'auto'
         if language and language != "auto":
             generate_kwargs["language"] = language
 
-        res = model.generate(**generate_kwargs)
+        try:
+            res = model.generate(**generate_kwargs)
+        except (RuntimeError, Exception) as e:
+            if "out of memory" in str(e).lower():
+                import torch
+                logger.warning("CUDA OOM, retrying with batch_size_s=5")
+                torch.cuda.empty_cache()
+                generate_kwargs["batch_size_s"] = 5
+                res = model.generate(**generate_kwargs)
+            else:
+                raise
         logger.info(f"Raw FunASR output: {len(res)} chunk(s)")
 
         # --- Parse result ---
@@ -301,6 +312,9 @@ def asr():
             except OSError:
                 pass
         touch_activity()
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 # --------------- Entry Point ---------------
