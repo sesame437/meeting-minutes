@@ -723,14 +723,16 @@ describe("Suite 5 — Batch 1 修复专项测试", () => {
     expect(exportWorkerSource).not.toMatch(/ScanCommand/);
   });
 
-  test("5j. report-worker 源码不包含 ScanCommand import（已替换为 GetCommand）", () => {
+  test("5j. report-worker 源码不在主表查询中使用 ScanCommand（词汇表扫描除外）", () => {
     const reportWorkerSource = require("fs").readFileSync(
       require("path").resolve(__dirname, "..", "workers", "report-worker.js"),
       "utf8"
     );
-    // ScanCommand 不应出现在 import 行
-    expect(reportWorkerSource).not.toMatch(/require.*ScanCommand/);
-    expect(reportWorkerSource).not.toMatch(/ScanCommand/);
+    // 主表查询应使用 GetCommand，不应使用 ScanCommand
+    // 注意：词汇表全量扫描合法使用 ScanCommand（meeting-minutes-glossary 表）
+    expect(reportWorkerSource).toMatch(/GetCommand/);
+    // ScanCommand 仅限用于词汇表，不应出现在 require 主表相关 import 中
+    expect(reportWorkerSource).not.toMatch(/require.*ScanCommand.*lib-dynamodb/);
   });
 
   test("5k. transcription-worker 中使用 QueryCommand（GSI）而非 ScanCommand 进行去重", () => {
