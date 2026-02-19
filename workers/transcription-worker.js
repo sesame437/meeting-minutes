@@ -17,6 +17,7 @@ const PREFIX = process.env.S3_PREFIX || "meeting-minutes";
 const REGION = process.env.AWS_REGION;
 const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE || "meeting-minutes-meetings";
 const WHISPER_URL = process.env.WHISPER_URL || "http://localhost:9000";
+const FUNASR_URL = process.env.FUNASR_URL || "";  // 空字符串表示未配置
 const POLL_INTERVAL = 5000; // 5 seconds between SQS polls
 
 const transcribeClient = new TranscribeClient({ region: REGION });
@@ -147,6 +148,73 @@ async function runWhisper(meetingId, s3Key, filename) {
   return outputKey;
 }
 
+// --------------- FunASR (Track 3) ---------------
+async function runFunASR(meetingId, s3Key) {
+  if (!FUNASR_URL) {
+    console.log("[FunASR] FUNASR_URL not configured, skipping");
+    return null;
+  }
+  // 健康检查
+  try {
+    const resp = await fetch(`${FUNASR_URL}/health`, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) throw new Error(`health check failed: ${resp.status}`);
+  } catch (err) {
+    console.warn(`[FunASR] Service not available at ${FUNASR_URL}, skipping: ${err.message}`);
+    return null;
+  }
+
+  const outputKey = `${PREFIX}/transcripts/${meetingId}/funasr.json`;
+
+  try {
+    console.log(`[FunASR] Sending s3_key to ${FUNASR_URL}/asr`);
+    const formData = new FormData();
+    formData.append("s3_key", s3Key);
+    formData.append("s3_bucket", process.env.S3_BUCKET || "yc-projects-012289836917");
+    formData.append("language", "zh");
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30 * 60 * 1000); // 30 分钟
+
+    let resp;
+    try {
+      resp = await fetch(`${FUNASR_URL}/asr`, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`FunASR /asr returned ${resp.status}: ${errText.slice(0, 200)}`);
+    }
+
+    const result = await resp.json();
+    if (result.error) throw new Error(`FunASR error: ${result.error}`);
+
+    // 上传结果到 S3
+    const s3Body = JSON.stringify(result);
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.S3_BUCKET || "yc-projects-012289836917",
+      Key: outputKey,
+      Body: s3Body,
+      ContentType: "application/json",
+    }));
+
+    console.log(`[FunASR] Done: ${result.segments?.length || 0} segments, ${result.speaker_count || 0} speakers → ${outputKey}`);
+    return outputKey;
+  } catch (err) {
+    if (err.name === "AbortError") {
+      console.error("[FunASR] Timeout after 30 minutes");
+    } else {
+      console.error("[FunASR] Failed:", err.message);
+    }
+    return null;
+  }
+}
+
 // --------------- DynamoDB Update ---------------
 
 async function updateMeetingStatus(meetingId, createdAt, status, extraAttrs = {}) {
@@ -267,8 +335,8 @@ async function processMessage(message) {
 
   console.log(`Processing transcription for meeting ${meetingId}, audio: ${s3Key}`);
 
-  // Run both tracks in parallel
-  const [transcribeKey, whisperKey] = await Promise.all([
+  // Run all three tracks in parallel
+  const [transcribeKey, whisperKey, funasrKey] = await Promise.all([
     runAWSTranscribe(meetingId, s3Key).catch((err) => {
       console.error(`[Transcribe] Failed:`, err.message);
       return null;
@@ -277,18 +345,23 @@ async function processMessage(message) {
       console.error(`[Whisper] Failed:`, err.message);
       return null;
     }),
+    runFunASR(meetingId, s3Key).catch((err) => {
+      console.error(`[FunASR] Failed:`, err.message);
+      return null;
+    }),
   ]);
 
-  if (!transcribeKey && !whisperKey) {
-    throw new Error(`Both transcription tracks failed for meeting ${meetingId}`);
+  if (!transcribeKey && !whisperKey && !funasrKey) {
+    throw new Error("All transcription tracks failed");
   }
 
-  console.log(`[Result] Transcribe: ${transcribeKey || "FAILED"}, Whisper: ${whisperKey || "SKIPPED/FAILED"}`);
+  console.log(`[Result] Transcribe: ${transcribeKey || "FAILED"}, Whisper: ${whisperKey || "SKIPPED"}, FunASR: ${funasrKey || "SKIPPED"}`);
 
   // Update DynamoDB meeting status
   await updateMeetingStatus(meetingId, createdAt, "transcribed", {
     transcribeKey: transcribeKey || "",
     whisperKey: whisperKey || "",
+    funasrKey: funasrKey || "",
   });
 
   // Resolve meetingType: use parsed value, or look up from DynamoDB
@@ -312,6 +385,7 @@ async function processMessage(message) {
     meetingId,
     transcribeKey: transcribeKey || null,
     whisperKey: whisperKey || null,
+    funasrKey: funasrKey || null,
     meetingType: resolvedMeetingType || "general",
     createdAt,
   });

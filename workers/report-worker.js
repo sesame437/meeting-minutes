@@ -4,10 +4,14 @@ const { getFile, uploadFile } = require("../services/s3");
 const { invokeModel } = require("../services/bedrock");
 const { docClient } = require("../db/dynamodb");
 const { UpdateCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
+const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 
 const QUEUE_URL = process.env.SQS_REPORT_QUEUE;
 const EXPORT_QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
 const TABLE = process.env.DYNAMODB_TABLE;
+const REGION = process.env.AWS_REGION;
+
+const s3Client = new S3Client({ region: REGION });
 
 const POLL_INTERVAL = 5000;
 
@@ -58,6 +62,40 @@ async function readTranscript(transcribeKey, whisperKey) {
   return transcribeText || whisperText;
 }
 
+async function readFunASRResult(funasrKey) {
+  if (!funasrKey) return null;
+  try {
+    const resp = await s3Client.send(new GetObjectCommand({
+      Bucket: process.env.S3_BUCKET || "yc-projects-012289836917",
+      Key: funasrKey,
+    }));
+    const body = await resp.Body.transformToString();
+    const data = JSON.parse(body);
+    // 格式化带说话人标签的文本
+    if (data.segments && data.segments.length > 0) {
+      const lines = [];
+      let currentSpeaker = null;
+      let currentText = "";
+      for (const seg of data.segments) {
+        const spk = seg.speaker || "SPEAKER_0";
+        if (spk !== currentSpeaker) {
+          if (currentText) lines.push(`[${currentSpeaker}] ${currentText.trim()}`);
+          currentSpeaker = spk;
+          currentText = seg.text || "";
+        } else {
+          currentText += seg.text || "";
+        }
+      }
+      if (currentText) lines.push(`[${currentSpeaker}] ${currentText.trim()}`);
+      return lines.join("\n");
+    }
+    return data.text || null;
+  } catch (err) {
+    console.warn("[FunASR] Failed to read result:", err.message);
+    return null;
+  }
+}
+
 async function getMeetingType(meetingId, createdAt, messageType) {
   // Use meetingType from SQS message if provided
   if (messageType && messageType !== "general") {
@@ -86,7 +124,14 @@ async function processMessage(message) {
   console.log(`Meeting type: ${meetingType}`);
 
   // 1. Read transcript from S3 (prefer transcribeKey, fallback to whisperKey)
-  const transcriptText = await readTranscript(transcribeKey, whisperKey);
+  let transcriptText = await readTranscript(transcribeKey, whisperKey);
+
+  // 加入 FunASR 转录（含说话人标签）
+  const funasrText = await readFunASRResult(body.funasrKey);
+  if (funasrText) {
+    const truncated = funasrText.slice(0, 60000);
+    transcriptText = `${transcriptText}\n\n[FunASR 转录（含说话人标签）]\n${truncated}`;
+  }
 
   // 2. Call Bedrock Claude to generate structured report
   const responseText = await invokeModel(transcriptText, meetingType);
