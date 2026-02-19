@@ -39,6 +39,9 @@ router.post("/", async (req, res, next) => {
 // Update term
 router.put("/:id", async (req, res, next) => {
   try {
+    if (req.body.term === undefined || req.body.term === null || req.body.term === "") {
+      return res.status(400).json({ error: "term is required" });
+    }
     const { term, definition, aliases } = req.body;
     const expressions = [];
     const names = {};
