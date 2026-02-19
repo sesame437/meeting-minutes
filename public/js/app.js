@@ -393,6 +393,128 @@ function renderMeetingDetail(m) {
     </div>
   `;
 
+  // ---- Customer 专属字段 ----
+  if (report.customerInfo || report.awsAttendees) {
+    const ci = report.customerInfo || {};
+    const awsAtt = report.awsAttendees || [];
+    html += `<div class="section-grid">
+      <div class="card">
+        <div class="card-title"><i class="fa fa-building"></i> 客户信息</div>
+        ${ci.company ? `<p style="font-size:15px;font-weight:600;margin:0 0 8px;">${esc(ci.company)}</p>` : ""}
+        ${ci.attendees && ci.attendees.length ? `<ul>${ci.attendees.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : '<p style="color:#879596;">未提及</p>'}
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fa fa-amazon"></i> AWS 出席人</div>
+        ${awsAtt.length ? `<ul>${awsAtt.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : '<p style="color:#879596;">未提及</p>'}
+      </div>
+    </div>`;
+  }
+
+  if (report.customerNeeds && report.customerNeeds.length) {
+    html += `<div class="card">
+      <div class="card-title"><i class="fa fa-bullseye"></i> 客户需求</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="color:var(--aws-orange)">需求</th>
+            <th style="color:var(--aws-orange)">优先级</th>
+            <th style="color:var(--aws-orange)">背景</th>
+          </tr></thead>
+          <tbody>
+            ${report.customerNeeds.map(n => {
+              const prio = (n.priority || "medium").toLowerCase();
+              return `<tr>
+                <td>${esc(n.need)}</td>
+                <td><span class="priority-badge priority-${prio}">${esc(n.priority || "-")}</span></td>
+                <td>${esc(n.background || "-")}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  if (report.painPoints && report.painPoints.length) {
+    html += `<div class="card">
+      <div class="card-title"><i class="fa fa-exclamation-triangle"></i> 客户痛点</div>
+      ${report.painPoints.map(p => `
+        <div style="border-left:4px solid #FF9900;padding:10px 14px;margin-bottom:8px;background:#fff8e1;border-radius:0 6px 6px 0;">
+          <strong>${esc(p.point)}</strong>
+          ${p.detail ? `<br><span style="color:#666;font-size:13px;">${esc(p.detail)}</span>` : ""}
+        </div>
+      `).join("")}
+    </div>`;
+  }
+
+  if (report.solutionsDiscussed && report.solutionsDiscussed.length) {
+    html += `<div class="card">
+      <div class="card-title"><i class="fa fa-lightbulb-o"></i> 讨论方案</div>
+      ${report.solutionsDiscussed.map(s => `
+        <div class="decision-card" style="margin-bottom:10px;">
+          <strong>${esc(s.solution)}</strong>
+          ${s.awsServices && s.awsServices.length ? `<div style="margin-top:6px;">${s.awsServices.map(svc => `<span style="display:inline-block;background:#232F3E;color:#FF9900;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;margin-right:4px;margin-bottom:4px;">${esc(svc)}</span>`).join("")}</div>` : ""}
+          ${s.customerFeedback ? `<p style="margin:6px 0 0;font-size:13px;color:#555;"><em>客户反馈：${esc(s.customerFeedback)}</em></p>` : ""}
+        </div>
+      `).join("")}
+    </div>`;
+  }
+
+  if (report.commitments && report.commitments.length) {
+    html += `<div class="card">
+      <div class="card-title"><i class="fa fa-handshake-o"></i> 承诺事项</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="color:var(--aws-orange)">方</th>
+            <th style="color:var(--aws-orange)">承诺内容</th>
+            <th style="color:var(--aws-orange)">负责人</th>
+            <th style="color:var(--aws-orange)">截止</th>
+          </tr></thead>
+          <tbody>
+            ${report.commitments.map(c => {
+              const party = (c.party || "").toLowerCase();
+              const borderColor = party.includes("aws") ? "#FF9900" : "#1565c0";
+              return `<tr style="border-left:4px solid ${borderColor};">
+                <td><strong>${esc(c.party || "-")}</strong></td>
+                <td>${esc(c.commitment)}</td>
+                <td>${esc(c.owner || "-")}</td>
+                <td>${esc(c.deadline || "-")}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  if (report.nextSteps && report.nextSteps.length) {
+    html += `<div class="card">
+      <div class="card-title"><i class="fa fa-arrow-circle-right"></i> 下一步行动</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="color:var(--aws-orange)">任务</th>
+            <th style="color:var(--aws-orange)">负责人</th>
+            <th style="color:var(--aws-orange)">截止日期</th>
+            <th style="color:var(--aws-orange)">优先级</th>
+          </tr></thead>
+          <tbody>
+            ${report.nextSteps.map(ns => {
+              const prio = (ns.priority || "").toLowerCase();
+              return `<tr>
+                <td>${esc(ns.task)}</td>
+                <td>${esc(ns.owner || "-")}</td>
+                <td>${esc(ns.deadline || "-")}</td>
+                <td><span class="priority-badge priority-${prio}">${esc(ns.priority || "-")}</span></td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
   // ---- Weekly 专属字段 ----
   const esc = escapeHtml;
 

@@ -81,6 +81,65 @@ function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
 只输出 JSON。`;
   }
 
+  if (meetingType === "customer") {
+    return `${speakerNote}${glossaryNote}你是专业的 AWS SA 会议纪要助手，请分析以下客户会议转录文本，生成结构化客户会议纪要。
+
+请严格输出以下 JSON 格式，不要包含任何额外文字：
+
+{
+  "meetingType": "customer",
+  "date": "会议日期（如转录中提及）",
+  "duration": "会议时长（如可推断）",
+  "summary": "2-3句话概括本次会议核心内容和结论",
+  "customerInfo": {
+    "company": "客户公司名称",
+    "attendees": ["客户参会人（姓名/职位）"]
+  },
+  "awsAttendees": ["AWS 参会人（姓名/职位）"],
+  "customerNeeds": [
+    {
+      "need": "客户需求描述",
+      "priority": "high / medium / low",
+      "background": "背景说明（如有）"
+    }
+  ],
+  "painPoints": [
+    {
+      "point": "客户痛点",
+      "detail": "详细说明"
+    }
+  ],
+  "solutionsDiscussed": [
+    {
+      "solution": "讨论的解决方案",
+      "awsServices": ["涉及的 AWS 服务"],
+      "customerFeedback": "客户反馈/态度"
+    }
+  ],
+  "commitments": [
+    {
+      "party": "AWS / 客户",
+      "commitment": "承诺内容",
+      "owner": "负责人",
+      "deadline": "截止时间（如提及）"
+    }
+  ],
+  "nextSteps": [
+    {
+      "task": "下一步行动",
+      "owner": "负责人",
+      "deadline": "截止日期",
+      "priority": "high / medium / low"
+    }
+  ],
+  "participants": ["所有参会人员"]
+}
+
+转录文本：${transcriptText}
+
+只输出 JSON。`;
+  }
+
   // general (default)
   return `${speakerNote}${glossaryNote}你是一个专业的会议纪要助手。请分析以下会议转录文本，生成结构化的会议纪要。
 
