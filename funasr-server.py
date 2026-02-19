@@ -1,5 +1,5 @@
 """
-FunASR ASR HTTP server based on Paraformer-SPK (speaker diarization).
+FunASR ASR HTTP server based on Paraformer + VAD + CAM++ (speaker diarization).
 
 Designed to run on EC2 GPU instance at /home/ubuntu/funasr-server.py
 
@@ -11,6 +11,7 @@ Endpoints:
 import hashlib
 import logging
 import os
+import pathlib
 import tempfile
 import threading
 import time
@@ -34,9 +35,18 @@ CACHE_DIR = "/opt/dlami/nvme/funasr-cache"
 CACHE_TTL_SECONDS = 24 * 3600  # 24 hours
 IDLE_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
 MODEL_PATH = os.environ.get("FUNASR_MODEL_PATH", "/opt/funasr-models/damo/speech_paraformer-large-vad-punc-spk_asr_nat-zh-cn")
+FUNASR_MODEL = os.environ.get("FUNASR_MODEL", "paraformer-zh")
 DEVICE = os.environ.get("FUNASR_DEVICE", "cuda")
-BATCH_SIZE_S = int(os.environ.get("FUNASR_BATCH_SIZE_S", "10"))
+BATCH_SIZE_S = int(os.environ.get("FUNASR_BATCH_SIZE_S", "300"))
 ENABLE_IDLE_SHUTDOWN = os.environ.get("ENABLE_IDLE_SHUTDOWN", "false").lower() == "true"
+
+# Decide which model to load: local path takes priority, fall back to FUNASR_MODEL
+if pathlib.Path(MODEL_PATH).exists():
+    model_to_load = MODEL_PATH
+    logger.info(f"Using local model path: {MODEL_PATH}")
+else:
+    model_to_load = FUNASR_MODEL
+    logger.info(f"Local model not found at {MODEL_PATH}, using: {FUNASR_MODEL}")
 
 # --------------- Global State ---------------
 
@@ -58,11 +68,15 @@ def touch_activity():
 
 # --------------- Model Initialization ---------------
 
-logger.info(f"Loading FunASR model from: {MODEL_PATH}")
+logger.info(f"Loading FunASR model: {model_to_load}")
 from funasr import AutoModel  # noqa: E402 (import after logging setup)
 
 model = AutoModel(
-    model=MODEL_PATH,
+    model=model_to_load,
+    vad_model="fsmn-vad",
+    vad_kwargs={"max_single_segment_time": 10000},  # VAD 最大分段 10 秒，防止 OOM
+    punc_model="ct-punc",
+    spk_model="cam++",
     device=DEVICE,
     disable_update=True,
 )
@@ -143,109 +157,6 @@ def download_from_s3(s3_bucket: str, s3_key: str) -> tuple[str, bool]:
     return local_path, False
 
 
-# --------------- Audio Chunking ---------------
-
-CHUNK_DURATION_S = int(os.environ.get("FUNASR_CHUNK_DURATION_S", "300"))  # 5分钟一片
-
-
-def chunk_audio(audio_path: str, chunk_duration: int = CHUNK_DURATION_S) -> list:
-    """用 ffmpeg 把音频切成固定长度片段，返回片段路径列表"""
-    import subprocess
-
-    # 获取总时长
-    probe = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", audio_path],
-        capture_output=True, text=True
-    )
-    import json as _json
-    duration = float(_json.loads(probe.stdout)["format"]["duration"])
-
-    if duration <= chunk_duration:
-        return [audio_path]  # 短于阈值，不切片
-
-    chunks = []
-    chunk_dir = audio_path + "_chunks"
-    os.makedirs(chunk_dir, exist_ok=True)
-
-    start = 0
-    idx = 0
-    while start < duration:
-        chunk_path = os.path.join(chunk_dir, f"chunk_{idx:04d}.wav")
-        subprocess.run([
-            "ffmpeg", "-y", "-i", audio_path,
-            "-ss", str(start), "-t", str(chunk_duration),
-            "-ar", "16000", "-ac", "1",  # 16kHz mono（FunASR 标准格式）
-            chunk_path
-        ], capture_output=True)
-        chunks.append(chunk_path)
-        start += chunk_duration
-        idx += 1
-
-    logger.info(f"Split audio into {len(chunks)} chunks of {chunk_duration}s")
-    return chunks
-
-
-# --------------- Result Parsing ---------------
-
-
-def parse_funasr_result(res: list) -> dict:
-    """
-    Parse FunASR model.generate() output into segments + metadata.
-
-    Each element in res may have:
-      - text: str  (full text for the segment/chunk)
-      - timestamp: list of [start_ms, end_ms] per character/word
-      - spk_id: str  (speaker label, e.g. "SPEAKER_0")
-      - spk: str  (alternative speaker field name)
-    """
-    segments = []
-    speakers_seen = []
-
-    for item in res:
-        raw_text = (item.get("text") or "").strip()
-        if not raw_text:
-            continue
-
-        # Speaker label: try spk_id first, then spk
-        spk_raw = item.get("spk_id") or item.get("spk") or "SPEAKER_0"
-        # Normalise to SPEAKER_N format
-        if isinstance(spk_raw, int):
-            speaker = f"SPEAKER_{spk_raw}"
-        else:
-            speaker = str(spk_raw)
-
-        # Timestamps: FunASR returns [[start_ms, end_ms], ...] per token
-        timestamps = item.get("timestamp") or []
-        if timestamps:
-            t_first = timestamps[0]
-            t_last = timestamps[-1]
-            start_sec = round(t_first[0] / 1000.0, 3)
-            end_sec = round((t_last[1] if len(t_last) > 1 else t_last[0]) / 1000.0, 3)
-        else:
-            start_sec = 0.0
-            end_sec = 0.0
-
-        segments.append(
-            {
-                "start": start_sec,
-                "end": end_sec,
-                "text": raw_text,
-                "speaker": speaker,
-            }
-        )
-
-        if speaker not in speakers_seen:
-            speakers_seen.append(speaker)
-
-    full_text = "".join(seg["text"] for seg in segments)
-    return {
-        "segments": segments,
-        "text": full_text,
-        "speakers": speakers_seen,
-        "speaker_count": len(speakers_seen),
-    }
-
-
 # --------------- Routes ---------------
 
 
@@ -254,7 +165,7 @@ def health():
     return jsonify(
         {
             "status": "ok",
-            "model": "paraformer-spk",
+            "model": model_to_load,
             "cache_dir": CACHE_DIR,
         }
     )
@@ -297,118 +208,79 @@ def asr():
 
         # --- Transcribe ---
         logger.info(f"Transcribing: {audio_path} (language={language})")
-        generate_kwargs_base = dict(
-            batch_size_s=BATCH_SIZE_S,
-            batch_size_threshold_s=int(os.environ.get("FUNASR_BATCH_THRESHOLD_S", "60")),
+
+        generate_kwargs = dict(
+            input=audio_path,
+            batch_size_s=BATCH_SIZE_S,           # 动态 batch 总秒数（默认 300）
+            batch_size_threshold_s=60,           # 超过 60s 的 VAD 片段单独处理
         )
         # FunASR AutoModel may accept a language hint; pass only when not 'auto'
         if language and language != "auto":
-            generate_kwargs_base["language"] = language
+            generate_kwargs["language"] = language
 
         import torch
+        torch.cuda.empty_cache()
 
-        # 切片处理
-        chunks = chunk_audio(audio_path)
-        all_segments = []
-        time_offset = 0.0
+        # 官方推荐单次调用，VAD 自动分段（max_single_segment_time=10000ms 防 OOM）
+        res = model.generate(**generate_kwargs)
 
-        for i, chunk_path in enumerate(chunks):
-            logger.info(f"Processing chunk {i+1}/{len(chunks)}: {chunk_path}")
-            torch.cuda.empty_cache()
+        logger.info(f"Raw FunASR output: {res}")
 
-            chunk_kwargs = dict(
-                input=chunk_path,
-                **generate_kwargs_base,
-            )
-            try:
-                chunk_res = model.generate(**chunk_kwargs)
-            except (RuntimeError, Exception) as e:
-                if "out of memory" in str(e).lower():
-                    logger.warning(f"OOM on chunk {i+1}, retrying with batch_size_s=5")
-                    torch.cuda.empty_cache()
-                    chunk_kwargs["batch_size_s"] = 5
-                    chunk_res = model.generate(**chunk_kwargs)
-                else:
-                    raise
+        # --- Parse result ---
+        # cam++ 输出格式：sentence_info 模式（优先）或 timestamp+spk_id 模式（fallback）
+        segments = []
+        if res and isinstance(res, list):
+            item = res[0] if isinstance(res[0], dict) else {}
 
-            # 解析 chunk 结果，时间戳加上 offset
-            for item in chunk_res:
-                timestamps = item.get("timestamp") or []
-                text_content = item.get("text", "").strip()
-                if not text_content:
-                    continue
+            # 优先用 sentence_info（cam++ 输出格式）
+            sentence_info = item.get("sentence_info", [])
+            if sentence_info:
+                for sent in sentence_info:
+                    segments.append({
+                        "start": round(sent.get("start", 0) / 1000.0, 3),
+                        "end": round(sent.get("end", 0) / 1000.0, 3),
+                        "text": sent.get("text", "").replace(" ", ""),  # 去掉字间空格
+                        "speaker": sent.get("spk", "SPEAKER_0"),
+                    })
+            else:
+                # fallback: 旧格式，整个 res 是 segments
+                for seg_item in res:
+                    timestamps = seg_item.get("timestamp") or []
+                    text_content = seg_item.get("text", "").replace(" ", "").strip()
+                    if not text_content:
+                        continue
+                    if timestamps:
+                        t0 = timestamps[0]
+                        t_last = timestamps[-1]
+                        start_sec = round(t0[0] / 1000.0, 3)
+                        end_sec = round((t_last[1] if len(t_last) > 1 else t_last[0]) / 1000.0, 3)
+                    else:
+                        start_sec, end_sec = 0.0, 0.0
+                    spk = seg_item.get("spk_id") or seg_item.get("spk") or "SPEAKER_0"
+                    segments.append({
+                        "start": start_sec,
+                        "end": end_sec,
+                        "text": text_content,
+                        "speaker": spk,
+                    })
 
-                if timestamps:
-                    t0 = timestamps[0]
-                    t_last = timestamps[-1]
-                    start_sec = round(t0[0] / 1000.0 + time_offset, 3)
-                    end_sec = round((t_last[1] if len(t_last) > 1 else t_last[0]) / 1000.0 + time_offset, 3)
-                else:
-                    start_sec = round(time_offset, 3)
-                    end_sec = round(time_offset + 1.0, 3)
-
-                spk_raw = item.get("spk_id") or item.get("spk") or "SPEAKER_0"
-                # 说话人 ID 加 chunk 偏移前缀，后续合并时需要归一化
-                speaker = f"SPK_{spk_raw}"
-
-                all_segments.append({
-                    "start": start_sec,
-                    "end": end_sec,
-                    "text": text_content,
-                    "speaker": speaker,
-                })
-
-            # 更新时间偏移（用实际 chunk 时长）
-            import subprocess as _sp
-            import json as _json2
-            probe2 = _sp.run(
-                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", chunk_path],
-                capture_output=True, text=True
-            )
-            try:
-                chunk_actual_dur = float(_json2.loads(probe2.stdout)["format"]["duration"])
-            except Exception:
-                chunk_actual_dur = CHUNK_DURATION_S
-            time_offset += chunk_actual_dur
-
-        # 清理临时片段目录
-        if len(chunks) > 1:
-            import shutil
-            chunk_dir = chunks[0].rsplit("/", 1)[0]
-            shutil.rmtree(chunk_dir, ignore_errors=True)
-
-        # 合并说话人 ID（跨片段归一化：按出现顺序映射为 SPEAKER_0/1/2...）
-        seen_speakers = {}
-        spk_counter = 0
-        for seg in all_segments:
-            raw = seg["speaker"]
-            if raw not in seen_speakers:
-                seen_speakers[raw] = f"SPEAKER_{spk_counter}"
-                spk_counter += 1
-            seg["speaker"] = seen_speakers[raw]
-
-        segments = all_segments
         full_text = "".join(seg["text"] for seg in segments)
         unique_speakers = sorted(set(seg["speaker"] for seg in segments))
 
-        logger.info(f"Raw FunASR output: {len(chunks)} chunk(s) -> {len(segments)} segment(s)")
-
-        # --- Detect language from result (FunASR may include it) ---
-        detected_lang = language
+        logger.info(
+            f"Done: {len(segments)} segments, "
+            f"{len(unique_speakers)} speaker(s), "
+            f"lang={language}"
+        )
 
         response_body = {
             "text": full_text,
             "segments": segments,
-            "language": detected_lang,
+            "language": language,
             "speakers": unique_speakers,
             "speaker_count": len(unique_speakers),
             "cached": cached,
         }
-        logger.info(
-            f"Done: {len(segments)} segments, "
-            f"{len(unique_speakers)} speaker(s), "
-            f"lang={detected_lang}"
-        )
         return jsonify(response_body)
 
     except Exception as e:
