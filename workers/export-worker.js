@@ -303,11 +303,6 @@ function buildHtmlBody(report, meetingName) {
 
 ${body}
 
-<!-- CTA -->
-<tr><td style="padding:4px 32px 28px;" align="center">
-  <a href="https://minutes.yc-wgr.com" style="display:inline-block;background:#FF9900;color:#232F3E;font-size:14px;font-weight:700;padding:12px 32px;border-radius:6px;text-decoration:none;">查看完整报告 →</a>
-</td></tr>
-
 <!-- Footer -->
 <tr><td style="background:#f8f9fa;padding:16px 32px;border-top:1px solid #e8edf2;">
   <p style="margin:0;font-size:11px;color:#879596;text-align:center;">
