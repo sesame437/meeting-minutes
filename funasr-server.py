@@ -152,7 +152,15 @@ def download_from_s3(s3_bucket: str, s3_key: str) -> tuple[str, bool]:
         return local_path, True
 
     logger.info(f"Downloading s3://{s3_bucket}/{s3_key} -> {local_path}")
-    s3_client.download_file(s3_bucket, s3_key, local_path)
+    tmp_path = local_path + ".tmp"
+    try:
+        s3_client.download_file(s3_bucket, s3_key, tmp_path)
+        os.rename(tmp_path, local_path)  # atomic on Linux
+    except Exception:
+        # 清理不完整的临时文件
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
     logger.info(f"Download complete: {os.path.getsize(local_path)} bytes")
     return local_path, False
 
