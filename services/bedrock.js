@@ -11,7 +11,7 @@ const DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-4-6";
 
 function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
   const speakerNote = transcriptText.includes("[SPEAKER_")
-    ? `转录文本中包含说话人标签（如 [SPEAKER_0]、[SPEAKER_1]），请利用这些标签识别不同发言人，在参会人列表和行动项中标注发言人编号或角色。\n\n`
+    ? `转录文本中包含说话人标签（如 [SPEAKER_0]、[SPEAKER_1]），请根据每位说话人的发言内容、语气和角色推断其身份（如"主持人"、"成员A"、"客户代表"等），在纪要中使用推断的角色名称而非 SPEAKER_X 编号。若无法推断具体身份，可使用"成员A/B/C"等匿名标注。\n\n`
     : "";
 
   const glossaryNote = glossaryTerms.length > 0
