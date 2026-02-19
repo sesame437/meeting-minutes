@@ -170,4 +170,70 @@ describe("POST /api/meetings/:id/retry", () => {
     expect(updateCall.ExpressionAttributeValues[":s"]).toBe("processing");
     expect(updateCall.ExpressionAttributeValues[":stage"]).toBe("transcribing");
   });
+
+  test("并发重试：ConditionalCheckFailedException -> 返回 409", async () => {
+    // GetItem 返回 failed 会议
+    mockSend.mockResolvedValueOnce({
+      Item: {
+        meetingId: "m-race",
+        status: "failed",
+        s3Key: "inbox/m-race/d.mp3",
+        filename: "d.mp3",
+        meetingType: "general",
+      },
+    });
+    // UpdateCommand 抛出 ConditionalCheckFailedException（模拟并发第二个请求）
+    const condErr = new Error("The conditional request failed");
+    condErr.name = "ConditionalCheckFailedException";
+    mockSend.mockRejectedValueOnce(condErr);
+
+    const handler = getRetryHandler();
+    const req = { params: { id: "m-race" } };
+    const res = createRes();
+    const next = jest.fn();
+
+    await handler(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({ error: "会议当前不是失败状态，无法重试" });
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  test("SQS 发送失败 -> 回滚 DynamoDB 到 failed -> 返回 500", async () => {
+    // GetItem 返回 failed 会议
+    mockSend.mockResolvedValueOnce({
+      Item: {
+        meetingId: "m-sqsfail",
+        status: "failed",
+        s3Key: "inbox/m-sqsfail/e.mp3",
+        filename: "e.mp3",
+        meetingType: "weekly",
+      },
+    });
+    // UpdateCommand (set processing) 成功
+    mockSend.mockResolvedValueOnce({ Attributes: {} });
+    // SQS sendMessage 失败
+    mockSendMessage.mockRejectedValueOnce(new Error("SQS unavailable"));
+    // Rollback UpdateCommand (set failed) 成功
+    mockSend.mockResolvedValueOnce({ Attributes: {} });
+
+    const handler = getRetryHandler();
+    const req = { params: { id: "m-sqsfail" } };
+    const res = createRes();
+    const next = jest.fn();
+
+    await handler(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual({ error: "重试入队失败，请稍后再试" });
+
+    // 验证回滚 UpdateCommand：状态回退到 failed
+    const rollbackCall = mockSend.mock.calls[2][0];
+    expect(rollbackCall._type).toBe("UpdateCommand");
+    expect(rollbackCall.ExpressionAttributeValues[":s"]).toBe("failed");
+    expect(rollbackCall.ExpressionAttributeValues[":stage"]).toBe("failed");
+    expect(rollbackCall.ExpressionAttributeValues[":em"]).toContain("SQS 入队失败");
+  });
 });
