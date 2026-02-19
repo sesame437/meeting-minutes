@@ -19,19 +19,43 @@ function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
     : "";
 
   if (meetingType === "weekly") {
-    return `${speakerNote}${glossaryNote}你是专业会议纪要助手，请分析以下周例会转录文本，生成结构化会议纪要。
+    return `${speakerNote}${glossaryNote}你是专业会议纪要助手，请分析以下 AWS SA 团队周例会转录文本，生成结构化会议纪要。周例会通常包含三大部分：团队/个人 KPI 汇报、公司公告事项、客户/项目逐个 Review。请注意：若 teamKPI 或 announcements 部分在转录中未明确提及，对应字段输出空数组即可，不要编造内容。
 
 转录文本：${transcriptText}
 
 以 JSON 格式输出：
 {
   "meetingType": "weekly",
-  "summary": "本次会议总结（2-3句话）",
-  "highlights": [{ "point": "业务进展要点", "detail": "详情" }],
-  "lowlights": [{ "point": "风险/阻塞项", "detail": "影响和解决建议" }],
-  "actions": [{ "task": "任务描述", "owner": "负责人", "deadline": "截止日期", "priority": "high/medium/low", "status": "new" }],
-  "decisions": [{ "decision": "决策内容", "rationale": "决策原因" }],
-  "participants": ["参会人列表"],
+  "summary": "本次周会总结（2-3句话，涵盖整体氛围和最重要结论）",
+  "teamKPI": {
+    "overview": "团队整体 KPI 完成情况概述",
+    "individuals": [
+      { "name": "SPEAKER_X 或姓名", "kpi": "个人 KPI 要点", "status": "on-track / at-risk / completed" }
+    ]
+  },
+  "announcements": [
+    { "title": "公告标题", "detail": "公告内容", "owner": "发布人（如提及）" }
+  ],
+  "projectReviews": [
+    {
+      "project": "项目/客户名称",
+      "progress": "本周进展概述",
+      "followUps": [
+        { "task": "待跟进事项", "owner": "SPEAKER_X 或姓名", "deadline": "截止时间（如提及）", "status": "new / in-progress / blocked" }
+      ],
+      "highlights": [{ "point": "亮点", "detail": "详情" }],
+      "lowlights": [{ "point": "问题或未达预期", "detail": "影响" }],
+      "risks": [{ "risk": "风险描述", "impact": "high / medium / low", "mitigation": "缓解措施或应对方向" }],
+      "challenges": [{ "challenge": "挑战", "detail": "背景和当前状态" }]
+    }
+  ],
+  "decisions": [
+    { "decision": "决策内容", "rationale": "决策原因", "owner": "决策人（如提及）" }
+  ],
+  "actions": [
+    { "task": "行动项", "owner": "SPEAKER_X 或姓名", "deadline": "截止日期（如提及）", "priority": "high / medium / low", "project": "关联项目（如有）" }
+  ],
+  "participants": ["SPEAKER_0（可能是：角色描述）"],
   "nextMeeting": "下次会议时间（如有提及）"
 }
 只输出 JSON。`;
