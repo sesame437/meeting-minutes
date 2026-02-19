@@ -529,19 +529,22 @@ async function processMessage(message) {
     console.log(`[export-worker] Meeting ${meetingId} marked as completed`);
   } catch (err) {
     console.error(`[export-worker] Failed for meeting ${meetingId}:`, err.message);
-    await docClient.send(new UpdateCommand({
-      TableName: TABLE,
-      Key: { meetingId, createdAt },
-      UpdateExpression: "SET #s = :s, errorMessage = :em, stage = :stage, updatedAt = :u",
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: {
-        ":s": "failed",
-        ":em": err.message,
-        ":stage": "failed",
-        ":u": nowISO(),
-      },
-    }));
-    throw err;
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE,
+        Key: { meetingId, createdAt },
+        UpdateExpression: "SET #s = :s, errorMessage = :em, stage = :stage, updatedAt = :u",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":s": "failed",
+          ":em": err.message,
+          ":stage": "failed",
+          ":u": nowISO(),
+        },
+      }));
+    } catch (updateErr) {
+      console.error('[export-worker] Failed to update error status:', updateErr.message);
+    }
   }
 }
 

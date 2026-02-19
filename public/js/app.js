@@ -170,21 +170,12 @@ async function fetchMeetings() {
 
   try {
     const meetings = await API.get("/api/meetings");
-    if (!meetings || meetings.length === 0) {
-      allMeetings = [];
-      if (list) {
-        list.innerHTML = '<div class="empty-state"><i class="fa fa-inbox"></i><br>No meetings yet. Upload an audio/video file above.</div>';
-      } else {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No meetings yet</td></tr>';
-      }
-      stopPolling();
-      return;
-    }
-    meetings.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-    allMeetings = meetings;
+    const meetingList = meetings || [];
+    meetingList.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    allMeetings = meetingList;
     renderFilteredMeetings();
     // Auto-polling: keep polling while any job is active
-    if (hasActiveJobs(meetings)) {
+    if (hasActiveJobs(meetingList)) {
       startPolling();
     } else {
       stopPolling();

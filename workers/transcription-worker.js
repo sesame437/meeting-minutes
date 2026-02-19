@@ -399,11 +399,14 @@ async function processMessage(message) {
     console.log(`Transcription complete for meeting ${meetingId}`);
   } catch (err) {
     console.error(`[transcription-worker] Failed for meeting ${meetingId}:`, err.message);
-    await updateMeetingStatus(meetingId, createdAt, "failed", {
-      errorMessage: err.message,
-      stage: "failed",
-    });
-    throw err;
+    try {
+      await updateMeetingStatus(meetingId, createdAt, "failed", {
+        errorMessage: err.message,
+        stage: "failed",
+      });
+    } catch (updateErr) {
+      console.error('[transcription-worker] Failed to update error status:', updateErr.message);
+    }
   }
 }
 

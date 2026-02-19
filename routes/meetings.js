@@ -219,25 +219,56 @@ router.post("/:id/retry", async (req, res, next) => {
     }
 
     // Reset status and send back to transcription queue
+    // Use ConditionExpression to prevent race condition: only update if still failed
     const updateExpr = "SET #s = :s, stage = :stage, updatedAt = :u REMOVE errorMessage";
-    await docClient.send(new UpdateCommand({
-      TableName: TABLE,
-      Key: { meetingId: req.params.id },
-      UpdateExpression: updateExpr,
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: {
-        ":s": "processing",
-        ":stage": "transcribing",
-        ":u": new Date().toISOString(),
-      },
-    }));
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE,
+        Key: { meetingId: req.params.id },
+        UpdateExpression: updateExpr,
+        ConditionExpression: "#s = :failed",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":s": "processing",
+          ":stage": "transcribing",
+          ":u": new Date().toISOString(),
+          ":failed": "failed",
+        },
+      }));
+    } catch (condErr) {
+      if (condErr.name === 'ConditionalCheckFailedException') {
+        return res.status(409).json({ error: '会议当前不是失败状态，无法重试' });
+      }
+      throw condErr;
+    }
 
-    await sendMessage(process.env.SQS_TRANSCRIPTION_QUEUE, {
-      meetingId: Item.meetingId,
-      s3Key: Item.s3Key,
-      filename: Item.filename,
-      meetingType: Item.meetingType || "general",
-    });
+    try {
+      await sendMessage(process.env.SQS_TRANSCRIPTION_QUEUE, {
+        meetingId: Item.meetingId,
+        s3Key: Item.s3Key,
+        filename: Item.filename,
+        meetingType: Item.meetingType || "general",
+      });
+    } catch (sqsErr) {
+      // Rollback: revert status to failed since SQS enqueue failed
+      try {
+        await docClient.send(new UpdateCommand({
+          TableName: TABLE,
+          Key: { meetingId: req.params.id },
+          UpdateExpression: "SET #s = :s, stage = :stage, errorMessage = :em, updatedAt = :u",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":s": "failed",
+            ":stage": "failed",
+            ":em": "SQS 入队失败: " + sqsErr.message,
+            ":u": new Date().toISOString(),
+          },
+        }));
+      } catch (rollbackErr) {
+        console.error('[retry] Rollback failed:', rollbackErr.message);
+      }
+      return res.status(500).json({ error: '重试入队失败，请稍后再试' });
+    }
 
     res.json({ success: true });
   } catch (err) {
