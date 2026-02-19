@@ -54,36 +54,88 @@ const Toast = {
   info(msg)    { this.show(msg, "info"); },
 };
 
-/* ===== Meetings ===== */
+/* ===== Meetings List ===== */
 async function fetchMeetings() {
+  const list = document.getElementById("meetings-list");
+  // fallback to old tbody
   const tbody = document.getElementById("meetings-tbody");
-  if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="4" class="loading">Loading...</td></tr>';
+  const target = list || tbody;
+  if (!target) return;
+
+  if (list) {
+    list.innerHTML = '<div class="loading">Loading...</div>';
+  } else {
+    tbody.innerHTML = '<tr><td colspan="4" class="loading">Loading...</td></tr>';
+  }
 
   try {
     const meetings = await API.get("/api/meetings");
     if (!meetings || meetings.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><i class="fa fa-inbox"></i>No meetings yet</td></tr>';
+      if (list) {
+        list.innerHTML = '<div class="empty-state"><i class="fa fa-inbox"></i><br>No meetings yet. Upload an audio/video file above.</div>';
+      } else {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No meetings yet</td></tr>';
+      }
       return;
     }
     meetings.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-    tbody.innerHTML = meetings.map(m => meetingRow(m)).join("");
+    if (list) {
+      list.innerHTML = meetings.map(m => meetingCard(m)).join("");
+    } else {
+      tbody.innerHTML = meetings.map(m => meetingRow(m)).join("");
+    }
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Failed to load meetings</td></tr>';
+    if (list) {
+      list.innerHTML = '<div class="empty-state">Failed to load meetings</div>';
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Failed to load meetings</td></tr>';
+    }
   }
 }
 
+function statusBadge(status) {
+  const labels = {
+    pending: "Pending", created: "Created",
+    transcribed: "Transcribed", transcribing: "Transcribing",
+    reported: "Reported", processing: "Processing",
+    completed: "Completed", failed: "Failed"
+  };
+  const label = labels[status] || status;
+  return `<span class="badge badge-${status}">${label}</span>`;
+}
+
+/* Card view for meeting list */
+function meetingCard(m) {
+  const title  = escapeHtml(m.title || m.meetingId);
+  const time   = m.createdAt ? new Date(m.createdAt).toLocaleString("zh-CN") : "-";
+  const status = m.status || "pending";
+  const id     = m.meetingId;
+
+  return `
+  <div class="meeting-card-item">
+    <div class="item-title">
+      <a href="meeting.html?id=${encodeURIComponent(id)}">${title}</a>
+    </div>
+    <div class="item-time">${time}</div>
+    <div>${statusBadge(status)}</div>
+    <div class="item-actions">
+      <a href="meeting.html?id=${encodeURIComponent(id)}" class="btn btn-outline btn-sm"><i class="fa fa-eye"></i> View</a>
+      ${status === "completed" ? `<button class="btn btn-success btn-sm" onclick="downloadPdf('${id}')"><i class="fa fa-download"></i> PDF</button>` : ""}
+      <button class="btn btn-danger btn-sm" onclick="deleteMeeting('${id}')"><i class="fa fa-trash"></i></button>
+    </div>
+  </div>`;
+}
+
+/* Table row fallback */
 function meetingRow(m) {
   const title = escapeHtml(m.title || m.meetingId);
   const time = m.createdAt ? new Date(m.createdAt).toLocaleString("zh-CN") : "-";
   const status = m.status || "pending";
-  const badgeClass = `badge badge-${status}`;
-  const statusLabel = { pending: "Pending", transcribed: "Transcribed", reported: "Reported", completed: "Completed", created: "Created" }[status] || status;
 
   return `<tr>
     <td><a href="meeting.html?id=${encodeURIComponent(m.meetingId)}">${title}</a></td>
     <td>${time}</td>
-    <td><span class="${badgeClass}">${statusLabel}</span></td>
+    <td>${statusBadge(status)}</td>
     <td>
       <div class="btn-group">
         <a href="meeting.html?id=${encodeURIComponent(m.meetingId)}" class="btn btn-outline btn-sm"><i class="fa fa-eye"></i> View</a>
@@ -109,12 +161,8 @@ function downloadPdf(id) {
 
 /* ===== File Upload ===== */
 function initUpload() {
-  const area = document.getElementById("upload-area");
+  const area  = document.getElementById("upload-area");
   const input = document.getElementById("upload-input");
-  const progress = document.getElementById("upload-progress");
-  const bar = document.getElementById("progress-bar");
-  const text = document.getElementById("progress-text");
-
   if (!area) return;
 
   area.addEventListener("dragover", e => {
@@ -149,8 +197,8 @@ async function uploadFile(file) {
   }
 
   const progress = document.getElementById("upload-progress");
-  const bar = document.getElementById("progress-bar");
-  const text = document.getElementById("progress-text");
+  const bar      = document.getElementById("progress-bar");
+  const text     = document.getElementById("progress-text");
 
   progress.classList.add("show");
   bar.style.width = "0%";
@@ -159,10 +207,12 @@ async function uploadFile(file) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("title", file.name.replace(/\.[^.]+$/, ""));
-  const meetingTypeSelect = document.getElementById("meetingType");
-  if (meetingTypeSelect) {
-    formData.append("meetingType", meetingTypeSelect.value);
-  }
+
+  // Support both pill radio and legacy select for meeting type
+  const radioChecked = document.querySelector('input[name="meetingType"]:checked');
+  const selectEl     = document.getElementById("meetingType");
+  const meetingType  = radioChecked ? radioChecked.value : (selectEl ? selectEl.value : "general");
+  formData.append("meetingType", meetingType);
 
   try {
     const xhr = new XMLHttpRequest();
@@ -219,77 +269,172 @@ async function fetchMeeting(id) {
 
 function renderMeetingDetail(m) {
   const content = document.getElementById("meeting-content");
-  const report = m.content || {};
-  const title = escapeHtml(m.title || m.meetingId);
-  const time = m.createdAt ? new Date(m.createdAt).toLocaleString("zh-CN") : "-";
-  const status = m.status || "pending";
-  const badgeClass = `badge badge-${status}`;
-  const statusLabel = { pending: "Pending", transcribed: "Transcribed", reported: "Reported", completed: "Completed", created: "Created" }[status] || status;
+  const report  = m.content || {};
+  const title   = escapeHtml(m.title || m.meetingId);
+  const time    = m.createdAt ? new Date(m.createdAt).toLocaleString("zh-CN") : "-";
+  const status  = m.status || "pending";
 
-  const highlights = report.highlights || [];
-  const lowlights = report.lowlights || [];
-  const actions = report.actions || [];
-  const summary = report.summary || "No summary available yet.";
+  const highlights  = report.highlights  || [];
+  const lowlights   = report.lowlights   || [];
+  const actions     = report.actions     || [];
+  const decisions   = report.decisions   || report.key_decisions || [];
+  const risks       = report.risks       || report.issues || [];
+  const participants= report.participants|| report.attendees || [];
+  const topics      = report.topics      || report.agenda_items || [];
+  const summary     = report.summary     || report.executive_summary || "No summary available yet.";
+  const duration    = report.duration    || m.duration || "-";
 
-  content.innerHTML = `
-    <div class="meeting-header">
-      <div>
-        <h1>${title}</h1>
-        <div class="meeting-meta">${time} &nbsp; <span class="${badgeClass}">${statusLabel}</span></div>
+  // ---- Header (Cloudscape style) ----
+  let html = `
+    <div class="meeting-detail-header">
+      <div class="brand">&#9670; Meeting Minutes</div>
+      <h1>${title}</h1>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        ${statusBadge(status)}
       </div>
     </div>
 
-    <div class="section-grid">
-      <div class="card">
-        <div class="card-title"><i class="fa fa-thumb-tack"></i> Highlights</div>
-        ${highlights.length
-          ? `<ul>${highlights.map(h => `<li>${escapeHtml(typeof h === "string" ? h : h.text || JSON.stringify(h))}</li>`).join("")}</ul>`
-          : '<div class="empty-state">No highlights</div>'}
-      </div>
-
-      <div class="card">
-        <div class="card-title"><i class="fa fa-exclamation-triangle"></i> Lowlights</div>
-        ${lowlights.length
-          ? `<ul>${lowlights.map(l => `<li>${escapeHtml(typeof l === "string" ? l : l.text || JSON.stringify(l))}</li>`).join("")}</ul>`
-          : '<div class="empty-state">No lowlights</div>'}
-      </div>
+    <div class="meeting-meta-bar">
+      <div class="meta-item"><strong>Date</strong>${time}</div>
+      <div class="meta-item"><strong>Duration</strong>${escapeHtml(String(duration))}</div>
+      <div class="meta-item"><strong>Participants</strong>${participants.length || "-"}</div>
+      <div class="meta-item"><strong>Meeting ID</strong>${escapeHtml(m.meetingId || "-")}</div>
     </div>
+  `;
 
-    <div class="card">
-      <div class="card-title"><i class="fa fa-check-square"></i> Follow-up Actions</div>
-      ${actions.length ? `
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Task</th><th>Owner</th><th>Deadline</th><th>Priority</th></tr></thead>
-          <tbody>
-            ${actions.map(a => {
-              const pClass = (a.priority || "").toLowerCase();
-              return `<tr>
-                <td>${escapeHtml(a.task || a.action || "")}</td>
-                <td>${escapeHtml(a.owner || a.assignee || "-")}</td>
-                <td>${escapeHtml(a.deadline || a.dueDate || "-")}</td>
-                <td><span class="priority-${pClass}">${escapeHtml(a.priority || "-")}</span></td>
-              </tr>`;
-            }).join("")}
-          </tbody>
-        </table>
-      </div>` : '<div class="empty-state">No actions</div>'}
-    </div>
-
-    <div class="card">
-      <div class="card-title"><i class="fa fa-file-text"></i> Summary</div>
+  // ---- Summary ----
+  html += `
+    <div class="card summary-card">
+      <div class="card-title"><i class="fa fa-file-text-o"></i> Executive Summary</div>
       <div class="summary-text">${escapeHtml(summary)}</div>
     </div>
   `;
 
-  // Bottom bar buttons
+  // ---- Topics / Agenda ----
+  if (topics.length) {
+    html += `
+      <div class="card">
+        <div class="card-title"><i class="fa fa-comments"></i> Topics Discussed</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="color:var(--aws-orange)">Topic</th>
+              <th style="color:var(--aws-orange)">Details</th>
+              <th style="color:var(--aws-orange)">Outcome</th>
+            </tr></thead>
+            <tbody>
+              ${topics.map(t => {
+                if (typeof t === "string") {
+                  return `<tr><td colspan="3">${escapeHtml(t)}</td></tr>`;
+                }
+                return `<tr>
+                  <td>${escapeHtml(t.topic || t.title || "")}</td>
+                  <td>${escapeHtml(t.details || t.discussion || "")}</td>
+                  <td>${escapeHtml(t.outcome || t.conclusion || "")}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  // ---- Highlights / Lowlights grid ----
+  if (highlights.length || lowlights.length) {
+    html += `<div class="section-grid">`;
+
+    if (highlights.length) {
+      html += `
+        <div class="card">
+          <div class="card-title"><i class="fa fa-thumb-tack"></i> Highlights</div>
+          <ul>${highlights.map(h => `<li>${escapeHtml(typeof h === "string" ? h : h.text || JSON.stringify(h))}</li>`).join("")}</ul>
+        </div>
+      `;
+    }
+
+    if (lowlights.length) {
+      html += `
+        <div class="card">
+          <div class="card-title"><i class="fa fa-exclamation-triangle"></i> Lowlights</div>
+          <ul>${lowlights.map(l => `<li>${escapeHtml(typeof l === "string" ? l : l.text || JSON.stringify(l))}</li>`).join("")}</ul>
+        </div>
+      `;
+    }
+
+    html += `</div>`;
+  }
+
+  // ---- Action Items ----
+  html += `
+    <div class="card">
+      <div class="card-title"><i class="fa fa-check-square-o"></i> Action Items</div>
+      ${actions.length ? `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="color:var(--aws-orange)">Task</th>
+            <th style="color:var(--aws-orange)">Owner</th>
+            <th style="color:var(--aws-orange)">Deadline</th>
+            <th style="color:var(--aws-orange)">Priority</th>
+          </tr></thead>
+          <tbody>
+            ${actions.map(a => {
+              const prio = (a.priority || "").toLowerCase();
+              const prioLabel = a.priority || "-";
+              return `<tr>
+                <td>${escapeHtml(a.task || a.action || "")}</td>
+                <td>${escapeHtml(a.owner || a.assignee || "-")}</td>
+                <td>${escapeHtml(a.deadline || a.dueDate || "-")}</td>
+                <td><span class="priority-badge priority-${prio}">${escapeHtml(prioLabel)}</span></td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>` : '<div class="empty-state">No action items</div>'}
+    </div>
+  `;
+
+  // ---- Key Decisions ----
+  if (decisions.length) {
+    html += `
+      <div class="card decisions-card">
+        <div class="card-title"><i class="fa fa-gavel"></i> Key Decisions</div>
+        <ul>${decisions.map(d => `<li>${escapeHtml(typeof d === "string" ? d : d.decision || d.text || JSON.stringify(d))}</li>`).join("")}</ul>
+      </div>
+    `;
+  }
+
+  // ---- Risks / Issues ----
+  if (risks.length) {
+    html += `
+      <div class="card risks-card">
+        <div class="card-title"><i class="fa fa-warning"></i> Risks &amp; Issues</div>
+        <ul>${risks.map(r => `<li>${escapeHtml(typeof r === "string" ? r : r.risk || r.issue || r.text || JSON.stringify(r))}</li>`).join("")}</ul>
+      </div>
+    `;
+  }
+
+  // ---- Participants ----
+  if (participants.length) {
+    html += `
+      <div class="card">
+        <div class="card-title"><i class="fa fa-users"></i> Participants</div>
+        <p class="participants-text">${participants.map(p => escapeHtml(typeof p === "string" ? p : p.name || JSON.stringify(p))).join(", ")}</p>
+      </div>
+    `;
+  }
+
+  content.innerHTML = html;
+
+  // Bottom bar
   const bottomBar = document.getElementById("bottom-bar");
   if (bottomBar) {
     bottomBar.innerHTML = `
-      <a href="index.html" class="btn btn-outline"><i class="fa fa-arrow-left"></i> Back to list</a>
+      <a href="index.html" class="btn btn-outline"><i class="fa fa-arrow-left"></i> Back</a>
       <div class="btn-group">
         <button class="btn btn-primary" onclick="downloadPdf('${m.meetingId}')"><i class="fa fa-download"></i> Download PDF</button>
-        <button class="btn btn-warning" onclick="sendEmail('${m.meetingId}')"><i class="fa fa-envelope"></i> Send Email</button>
+        <button class="btn btn-outline" onclick="sendEmail('${m.meetingId}')"><i class="fa fa-envelope"></i> Send Email</button>
       </div>
     `;
   }
@@ -318,12 +463,12 @@ async function fetchGlossary() {
 function renderGlossary(terms) {
   const tbody = document.getElementById("glossary-tbody");
   if (!terms || terms.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><i class="fa fa-book"></i>No terms yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><i class="fa fa-book"></i>&nbsp;No terms yet</td></tr>';
     return;
   }
   tbody.innerHTML = terms.map(t => {
-    const term = escapeHtml(t.term || "");
-    const aliases = escapeHtml(t.aliases || "");
+    const term       = escapeHtml(t.term       || "");
+    const aliases    = escapeHtml(t.aliases    || "");
     const definition = escapeHtml(t.definition || "");
     return `<tr>
       <td><strong>${term}</strong></td>
@@ -342,8 +487,8 @@ function renderGlossary(terms) {
 function filterGlossary(query) {
   const q = query.toLowerCase();
   const filtered = glossaryData.filter(t =>
-    (t.term || "").toLowerCase().includes(q) ||
-    (t.aliases || "").toLowerCase().includes(q) ||
+    (t.term       || "").toLowerCase().includes(q) ||
+    (t.aliases    || "").toLowerCase().includes(q) ||
     (t.definition || "").toLowerCase().includes(q)
   );
   renderGlossary(filtered);
@@ -353,8 +498,8 @@ async function addTerm(e) {
   e.preventDefault();
   const form = e.target;
   const data = {
-    term: form.term.value.trim(),
-    aliases: form.aliases.value.trim(),
+    term:       form.term.value.trim(),
+    aliases:    form.aliases.value.trim(),
     definition: form.definition.value.trim(),
   };
   if (!data.term) { Toast.error("Term name is required"); return; }
@@ -383,8 +528,8 @@ function editTerm(id) {
   const overlay = document.getElementById("edit-modal");
   if (!overlay) return;
 
-  document.getElementById("edit-term").value = term.term || "";
-  document.getElementById("edit-aliases").value = term.aliases || "";
+  document.getElementById("edit-term").value       = term.term       || "";
+  document.getElementById("edit-aliases").value    = term.aliases    || "";
   document.getElementById("edit-definition").value = term.definition || "";
   overlay.dataset.termId = id;
   overlay.classList.add("show");
@@ -396,7 +541,7 @@ async function saveEditTerm(e) {
   const id = overlay.dataset.termId;
 
   const data = {
-    term: document.getElementById("edit-term").value.trim(),
+    term:       document.getElementById("edit-term").value.trim(),
     definition: document.getElementById("edit-definition").value.trim(),
   };
 

@@ -10,7 +10,7 @@
 <body>
 
   <nav class="navbar">
-    <div class="navbar-logo">Meeting Minutes</div>
+    <div class="navbar-logo">&#9670; Meeting Minutes</div>
     <div class="navbar-links">
       <a href="index.html" class="active">Meeting List</a>
       <a href="glossary.html">Glossary</a>
@@ -22,18 +22,23 @@
     <!-- Upload Area -->
     <div class="card">
       <div class="card-title"><i class="fa fa-cloud-upload"></i> Upload Audio / Video</div>
-      <div class="upload-options" style="margin-bottom: 12px;">
-        <label for="meetingType" style="margin-right: 8px; font-weight: 500;">Meeting Type:</label>
-        <select name="meetingType" id="meetingType" style="padding: 6px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px;">
-          <option value="general">General</option>
-          <option value="weekly">Weekly (Business/Follow-up)</option>
-          <option value="tech">Tech Discussion</option>
-        </select>
+      <div class="upload-options">
+        <label>Meeting Type:</label>
+        <div class="meeting-type-pills">
+          <input type="radio" name="meetingType" id="mt-general" value="general" checked>
+          <label for="mt-general">General</label>
+
+          <input type="radio" name="meetingType" id="mt-weekly" value="weekly">
+          <label for="mt-weekly">Weekly</label>
+
+          <input type="radio" name="meetingType" id="mt-tech" value="tech">
+          <label for="mt-tech">Tech Discussion</label>
+        </div>
       </div>
       <div class="upload-area" id="upload-area">
         <input type="file" id="upload-input" accept=".mp4,.mp3,.m4a">
         <i class="fa fa-cloud-upload"></i>
-        <p>Drag & drop MP4/MP3 file here, or click to select</p>
+        <p>Drag &amp; drop MP4 / MP3 file here, or click to select</p>
         <p class="upload-hint">Supports MP4, MP3, M4A formats</p>
       </div>
       <div class="upload-progress" id="upload-progress">
@@ -47,20 +52,8 @@
     <!-- Meeting List -->
     <div class="card">
       <div class="card-title"><i class="fa fa-list"></i> Meeting List</div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Meeting Name</th>
-              <th>Upload Time</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="meetings-tbody">
-            <tr><td colspan="4" class="loading">Loading...</td></tr>
-          </tbody>
-        </table>
+      <div class="meeting-card-list" id="meetings-list">
+        <div class="loading">Loading...</div>
       </div>
     </div>
 
@@ -68,6 +61,9 @@
 
   <script src="js/app.js"></script>
   <script>
+    // Override meetingType read to use radio pills
+    var _origUploadFile = uploadFile;
+
     document.addEventListener("DOMContentLoaded", function() {
       initUpload();
       fetchMeetings();
