@@ -310,6 +310,89 @@ function renderMeetingDetail(m) {
     </div>
   `;
 
+  // ---- Weekly 专属字段 ----
+  const esc = escapeHtml;
+
+  // teamKPI（weekly 专属）
+  if (report.teamKPI) {
+    const kpi = report.teamKPI;
+    let kpiHtml = `<div class="report-section">
+      <h3 class="section-title">📊 团队 KPI</h3>`;
+    if (kpi.overview) {
+      kpiHtml += `<p class="section-text">${esc(kpi.overview)}</p>`;
+    }
+    if (kpi.individuals && kpi.individuals.length) {
+      const statusColor = (s) => s==='completed'?'#2e7d32':s==='at-risk'?'#c62828':'#1565c0';
+      const statusLabel = (s) => s==='completed'?'已完成':s==='at-risk'?'有风险':'正常';
+      kpiHtml += `<table class="report-table">
+        <thead><tr>
+          <th>成员</th><th>KPI</th><th>状态</th>
+        </tr></thead><tbody>`;
+      for (const ind of kpi.individuals) {
+        kpiHtml += `<tr>
+          <td><strong>${esc(ind.name)}</strong></td>
+          <td>${esc(ind.kpi)}</td>
+          <td><span style="color:${statusColor(ind.status)};font-weight:600;">${statusLabel(ind.status)}</span></td>
+        </tr>`;
+      }
+      kpiHtml += `</tbody></table>`;
+    }
+    kpiHtml += `</div>`;
+    html += kpiHtml;
+  }
+
+  // announcements（weekly 专属）
+  if (report.announcements && report.announcements.length) {
+    let annHtml = `<div class="report-section">
+      <h3 class="section-title">📢 公司公告</h3>`;
+    for (const a of report.announcements) {
+      annHtml += `<div class="decision-card" style="margin-bottom:8px;">
+        <strong>${esc(a.title)}</strong>
+        ${a.detail ? `<br><span style="color:#555;font-size:13px;">${esc(a.detail)}</span>` : ''}
+        ${a.owner ? `<br><span style="color:#879596;font-size:12px;">发布：${esc(a.owner)}</span>` : ''}
+      </div>`;
+    }
+    annHtml += `</div>`;
+    html += annHtml;
+  }
+
+  // projectReviews（weekly 专属）
+  if (report.projectReviews && report.projectReviews.length) {
+    for (const pr of report.projectReviews) {
+      let prHtml = `<div class="report-section">
+        <h3 class="section-title">🗂 ${esc(pr.project)}</h3>`;
+      if (pr.progress) {
+        prHtml += `<p class="section-text" style="background:#f8f9fa;padding:10px 14px;border-radius:6px;">${esc(pr.progress)}</p>`;
+      }
+      // highlights + lowlights
+      if ((pr.highlights&&pr.highlights.length)||(pr.lowlights&&pr.lowlights.length)) {
+        if (pr.highlights) for (const h of pr.highlights) {
+          prHtml += `<p style="margin:4px 0;font-size:13px;"><span style="color:#2e7d32;margin-right:6px;">▲</span><strong>${esc(h.point)}</strong>${h.detail?` — <span style="color:#666;">${esc(h.detail)}</span>`:''}</p>`;
+        }
+        if (pr.lowlights) for (const l of pr.lowlights) {
+          prHtml += `<p style="margin:4px 0;font-size:13px;"><span style="color:#e65100;margin-right:6px;">▼</span><strong>${esc(l.point)}</strong>${l.detail?` — <span style="color:#666;">${esc(l.detail)}</span>`:''}</p>`;
+        }
+      }
+      // risks
+      if (pr.risks && pr.risks.length) {
+        for (const r of pr.risks) {
+          prHtml += `<div class="risk-card" style="margin-top:8px;">⚠️ <strong>${esc(r.risk)}</strong>${r.mitigation?`<br><span style="font-size:12px;color:#666;">${esc(r.mitigation)}</span>`:''}</div>`;
+        }
+      }
+      // followUps
+      if (pr.followUps && pr.followUps.length) {
+        prHtml += `<table class="report-table" style="margin-top:10px;">
+          <thead><tr><th>跟进事项</th><th>负责人</th><th>截止</th></tr></thead><tbody>`;
+        for (const f of pr.followUps) {
+          prHtml += `<tr><td>${esc(f.task)}</td><td>${esc(f.owner||'-')}</td><td>${esc(f.deadline||'-')}</td></tr>`;
+        }
+        prHtml += `</tbody></table>`;
+      }
+      prHtml += `</div>`;
+      html += prHtml;
+    }
+  }
+
   // ---- Topics / Agenda ----
   if (topics.length) {
     html += `
