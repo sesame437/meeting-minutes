@@ -54,6 +54,39 @@ const Toast = {
   info(msg)    { this.show(msg, "info"); },
 };
 
+/* ===== Auto-polling ===== */
+let pollingTimer = null;
+
+function hasActiveJobs(meetings) {
+  const activeStatuses = ['pending', 'processing', 'transcribing', 'reporting'];
+  return meetings.some(m => activeStatuses.includes(m.status));
+}
+
+function startPolling() {
+  if (pollingTimer) return;
+  showSyncIndicator(true);
+  pollingTimer = setInterval(async () => {
+    await fetchMeetings();
+  }, 12000);
+}
+
+function stopPolling() {
+  if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; }
+  showSyncIndicator(false);
+}
+
+function showSyncIndicator(show) {
+  let el = document.getElementById('sync-indicator');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sync-indicator';
+    el.style.cssText = 'position:fixed;top:70px;right:20px;background:#232F3E;color:#FF9900;font-size:12px;padding:6px 12px;border-radius:4px;z-index:1000;display:none;';
+    el.textContent = '🔄 同步中…';
+    document.body.appendChild(el);
+  }
+  el.style.display = show ? 'block' : 'none';
+}
+
 /* ===== Meetings List ===== */
 async function fetchMeetings() {
   const list = document.getElementById("meetings-list");
@@ -76,6 +109,7 @@ async function fetchMeetings() {
       } else {
         tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No meetings yet</td></tr>';
       }
+      stopPolling();
       return;
     }
     meetings.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
@@ -83,6 +117,12 @@ async function fetchMeetings() {
       list.innerHTML = meetings.map(m => meetingCard(m)).join("");
     } else {
       tbody.innerHTML = meetings.map(m => meetingRow(m)).join("");
+    }
+    // Auto-polling: keep polling while any job is active
+    if (hasActiveJobs(meetings)) {
+      startPolling();
+    } else {
+      stopPolling();
     }
   } catch (_) {
     if (list) {
@@ -120,7 +160,6 @@ function meetingCard(m) {
     <div>${statusBadge(status)}</div>
     <div class="item-actions">
       <a href="meeting.html?id=${encodeURIComponent(id)}" class="btn btn-outline btn-sm"><i class="fa fa-eye"></i> View</a>
-      ${status === "completed" ? `<button class="btn btn-success btn-sm" onclick="downloadPdf('${id}')"><i class="fa fa-download"></i> PDF</button>` : ""}
       <button class="btn btn-danger btn-sm" onclick="deleteMeeting('${id}')"><i class="fa fa-trash"></i></button>
     </div>
   </div>`;
@@ -139,7 +178,6 @@ function meetingRow(m) {
     <td>
       <div class="btn-group">
         <a href="meeting.html?id=${encodeURIComponent(m.meetingId)}" class="btn btn-outline btn-sm"><i class="fa fa-eye"></i> View</a>
-        ${status === "completed" ? `<button class="btn btn-success btn-sm" onclick="downloadPdf('${m.meetingId}')"><i class="fa fa-download"></i> PDF</button>` : ""}
         <button class="btn btn-danger btn-sm" onclick="deleteMeeting('${m.meetingId}')"><i class="fa fa-trash"></i></button>
       </div>
     </td>
@@ -153,10 +191,6 @@ async function deleteMeeting(id) {
     Toast.success("Meeting deleted");
     fetchMeetings();
   } catch (_) { /* error already shown by API */ }
-}
-
-function downloadPdf(id) {
-  Toast.info("PDF download is handled by the export worker. Check your email.");
 }
 
 /* ===== File Upload ===== */
@@ -516,7 +550,6 @@ function renderMeetingDetail(m) {
     bottomBar.innerHTML = `
       <a href="index.html" class="btn btn-outline"><i class="fa fa-arrow-left"></i> Back</a>
       <div class="btn-group">
-        <button class="btn btn-primary" onclick="downloadPdf('${m.meetingId}')"><i class="fa fa-download"></i> Download PDF</button>
         <button class="btn btn-outline" onclick="sendEmail('${m.meetingId}')"><i class="fa fa-envelope"></i> Send Email</button>
       </div>
     `;
@@ -625,6 +658,7 @@ async function saveEditTerm(e) {
 
   const data = {
     term:       document.getElementById("edit-term").value.trim(),
+    aliases:    document.getElementById("edit-aliases").value.trim(),
     definition: document.getElementById("edit-definition").value.trim(),
   };
 
