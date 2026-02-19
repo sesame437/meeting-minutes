@@ -39,7 +39,7 @@ router.post("/", async (req, res, next) => {
 // Update term
 router.put("/:id", async (req, res, next) => {
   try {
-    const { term, definition } = req.body;
+    const { term, definition, aliases } = req.body;
     const expressions = [];
     const names = {};
     const values = {};
@@ -53,6 +53,11 @@ router.put("/:id", async (req, res, next) => {
       expressions.push("#d = :d");
       names["#d"] = "definition";
       values[":d"] = definition;
+    }
+    if (aliases !== undefined) {
+      expressions.push("#a = :a");
+      names["#a"] = "aliases";
+      values[":a"] = aliases;
     }
 
     expressions.push("updatedAt = :u");

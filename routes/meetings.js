@@ -1,6 +1,7 @@
 const { Router } = require("express");
 const crypto = require("crypto");
 const fs = require("fs");
+const path = require("path");
 const multer = require("multer");
 const { docClient } = require("../db/dynamodb");
 const {
@@ -15,7 +16,27 @@ const { sendMessage } = require("../services/sqs");
 
 const router = Router();
 const TABLE = process.env.DYNAMODB_TABLE;
-const upload = multer({ dest: "/tmp" });
+const upload = multer({
+  dest: "/tmp",
+  limits: {
+    fileSize: 2 * 1024 * 1024 * 1024, // 2GB 上限
+    files: 1,
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = [
+      "audio/mpeg", "audio/wav", "audio/mp4", "audio/x-m4a",
+      "audio/ogg", "audio/webm", "video/mp4", "video/webm",
+      "video/quicktime", "application/octet-stream",
+    ];
+    const allowedExts = [".mp3", ".wav", ".mp4", ".m4a", ".ogg", ".webm", ".mov"];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`不支持的文件格式: ${file.originalname}`), false);
+    }
+  },
+});
 
 // List meetings
 router.get("/", async (_req, res, next) => {
@@ -112,7 +133,21 @@ router.delete("/:id", async (req, res, next) => {
 });
 
 // Upload file and start transcription
-router.post("/upload", upload.single("file"), async (req, res, next) => {
+router.post("/upload", (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      // Clean up temp file if it exists
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "文件大小超过 2GB 限制" });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file provided" });
