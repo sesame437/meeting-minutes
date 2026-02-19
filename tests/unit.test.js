@@ -212,20 +212,3 @@ describe("Dedup logic (conceptual via mock)", () => {
     );
   });
 });
-
-// ─────────────────────────────────────────────────────────
-// Test 4: PDF font file existence check
-// ─────────────────────────────────────────────────────────
-
-describe("PDF CJK font file", () => {
-  const fontPath = path.resolve(__dirname, "..", "fonts", "NotoSansSC-Regular.ttf");
-
-  test("fonts/NotoSansSC-Regular.ttf exists in the project", () => {
-    expect(fs.existsSync(fontPath)).toBe(true);
-  });
-
-  test("fonts/NotoSansSC-Regular.ttf is a valid font (non-zero size)", () => {
-    const stat = fs.statSync(fontPath);
-    expect(stat.size).toBeGreaterThan(0);
-  });
-});

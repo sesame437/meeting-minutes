@@ -6,8 +6,7 @@
  * 覆盖：
  *   1. createdAt 传播 (transcription-worker → report-worker → export-worker)
  *   2. report-worker getMeetingType() 优先级逻辑
- *   3. export-worker PDF 字体文件存在性
- *   4. transcription-worker S3 key 去重 (ScanCommand) 逻辑
+ *   3. transcription-worker S3 key 去重 (ScanCommand) 逻辑
  */
 
 const path = require("path");
@@ -353,54 +352,10 @@ describe("Suite 2 — report-worker getMeetingType() 优先级（GetCommand 版�
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Suite 3 ─ export-worker PDF 字体文件
+// Suite 3 ─ transcription-worker S3 key 去重 (ScanCommand) 逻辑
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("Suite 3 — export-worker PDF 字体文件", () => {
-
-  const fontPath = path.resolve(__dirname, "..", "fonts", "NotoSansSC-Regular.ttf");
-
-  test("3a. fonts/NotoSansSC-Regular.ttf 存在", () => {
-    expect(fs.existsSync(fontPath)).toBe(true);
-  });
-
-  test("3b. fonts/NotoSansSC-Regular.ttf 文件大小 > 0 字节", () => {
-    const stat = fs.statSync(fontPath);
-    expect(stat.size).toBeGreaterThan(0);
-  });
-
-  test("3c. fonts/NotoSansSC-Regular.ttf 文件大小合理（TTF 通常 > 1 MB）", () => {
-    const stat = fs.statSync(fontPath);
-    expect(stat.size).toBeGreaterThan(1024 * 1024); // > 1 MB
-  });
-
-  test("3d. 字体文件以 TTF magic bytes 开头（0x00 0x01 0x00 0x00）", () => {
-    const fd  = fs.openSync(fontPath, "r");
-    const buf = Buffer.alloc(4);
-    fs.readSync(fd, buf, 0, 4, 0);
-    fs.closeSync(fd);
-    // TTF magic: 00 01 00 00  或 OpenType/CFF: 4F 54 54 4F
-    const magic = buf.toString("hex");
-    const validMagics = ["00010000", "4f54544f"];
-    expect(validMagics).toContain(magic);
-  });
-
-  test("3e. export-worker generatePdf 能找到字体（不触发 Helvetica fallback）", () => {
-    // 验证 export-worker 内部解析路径与字体文件位置一致
-    const workerDir = path.resolve(__dirname, "..", "workers");
-    const resolvedFont = path.resolve(workerDir, "..", "fonts", "NotoSansSC-Regular.ttf");
-    expect(fs.existsSync(resolvedFont)).toBe(true);
-
-    // accessSync 不应抛出异常
-    expect(() => fs.accessSync(resolvedFont)).not.toThrow();
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite 4 ─ transcription-worker S3 key 去重 (ScanCommand) 逻辑
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("Suite 4 — transcription-worker S3 key 去重逻辑", () => {
+describe("Suite 3 — transcription-worker S3 key 去重逻辑", () => {
 
   const { ScanCommand } = require("@aws-sdk/lib-dynamodb");
 

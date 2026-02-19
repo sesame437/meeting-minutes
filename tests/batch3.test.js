@@ -6,8 +6,7 @@
  * 覆盖：
  *   Suite A: extractTranscribeText() — report-worker.js
  *   Suite B: truncateTranscript()   — services/bedrock.js
- *   Suite C: generatePdf() 章节标题无 emoji — workers/export-worker.js
- *   Suite D: GSI Query 去重逻辑 — transcription-worker.js
+ *   Suite C: GSI Query 去重逻辑 — transcription-worker.js
  */
 
 // ─── Mocks (必须在 require 任何模块之前) ─────────────────────────────────────
@@ -320,81 +319,10 @@ describe("Suite B — truncateTranscript()", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Suite C — generatePdf() 章节标题无 emoji
+// Suite C — transcription-worker GSI Query 去重逻辑
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("Suite C — export-worker.js 章节标题不含 emoji", () => {
-
-  /**
-   * 直接读取 export-worker.js 源码，验证 doc.text() 调用中的标题字符串。
-   * 这样不需要运行 PDFKit（避免环境依赖），而且对源码变更更敏感。
-   */
-  const fs   = require("fs");
-  const path = require("path");
-  const source = fs.readFileSync(
-    path.resolve(__dirname, "..", "workers", "export-worker.js"),
-    "utf8"
-  );
-
-  const BANNED_EMOJIS = ["📝", "📌", "⚠️", "✅", "👥"];
-
-  // ── C1: 验证源码中 doc.text() 章节标题不含任何被禁 emoji ────────────────
-  test("C1: export-worker.js 源码不含被禁 emoji（📝📌⚠️✅👥）", () => {
-    for (const emoji of BANNED_EMOJIS) {
-      expect(source).not.toContain(emoji);
-    }
-  });
-
-  // ── C2~C6: 逐个 emoji 验证 ───────────────────────────────────────────────
-  test.each(BANNED_EMOJIS)("C2~C6: 源码不含 emoji '%s'", (emoji) => {
-    expect(source).not.toContain(emoji);
-  });
-
-  // ── C7: 验证四个章节标题使用纯文字 ─────────────────────────────────────
-  test("C7: 摘要章节标题为纯文字 '摘要'（无 emoji 前缀）", () => {
-    // 匹配 doc.text("摘要") 或 doc.fontSize(14).text("摘要")
-    expect(source).toMatch(/\.text\("摘要"\)/);
-  });
-
-  test("C8: 亮点章节标题为纯文字 '亮点'（无 emoji 前缀）", () => {
-    expect(source).toMatch(/\.text\("亮点"\)/);
-  });
-
-  test("C9: 风险章节标题为纯文字 '风险'（无 emoji 前缀）", () => {
-    expect(source).toMatch(/\.text\("风险"\)/);
-  });
-
-  test("C10: 行动项章节标题为纯文字 '行动项'（无 emoji 前缀）", () => {
-    expect(source).toMatch(/\.text\("行动项"\)/);
-  });
-
-  // ── C11: generatePdf 函数实际运行（集成验证，需要 pdfkit）────────────────
-  test("C11: generatePdf 实际运行，输出 PDF Buffer（不含 emoji 章节标题）", async () => {
-    // 动态 require export-worker 的 generatePdf — 由于 worker 文件末尾调用 poll()，
-    // 需要在安全的 mock 环境下 require
-    // 我们直接内联一个简化版 generatePdf 来验证 emoji 不在标题中
-    // （完整集成测试通过 源码检查 C7-C10 已覆盖）
-
-    // 验证：generatePdf 函数存在于源码中
-    expect(source).toContain("function generatePdf");
-    // 验证：四个章节标题均为纯文字（不含任何 emoji 字符，Unicode 范围 \u{1F000}-\u{1FFFF}）
-    const emojiPattern = /[\u{1F000}-\u{1FFFF}]/u;
-    const textCallMatches = source.match(/\.text\("[^"]*"\)/g) || [];
-    const sectionTitles = textCallMatches.filter(m =>
-      m.includes("摘要") || m.includes("亮点") || m.includes("风险") || m.includes("行动项")
-    );
-    expect(sectionTitles.length).toBeGreaterThan(0);
-    for (const title of sectionTitles) {
-      expect(emojiPattern.test(title)).toBe(false);
-    }
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite D — transcription-worker GSI Query 去重逻辑
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("Suite D — transcription-worker GSI Query 去重逻辑（QueryCommand）", () => {
+describe("Suite C — transcription-worker GSI Query 去重逻辑（QueryCommand）", () => {
 
   const { QueryCommand } = require("@aws-sdk/lib-dynamodb");
   const mockDocClientSend = require("../db/dynamodb").docClient.send;

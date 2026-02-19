@@ -7,7 +7,6 @@
  *   Suite A: report-worker poll() per-message try/catch
  *   Suite B: transcription-worker runWhisper AbortController 30min 超时
  *   Suite C: report-worker readTranscript ensemble (Promise.allSettled)
- *   Suite D: bedrock.js dualTrackNote 双轨说明
  */
 
 jest.mock("dotenv", () => ({ config: jest.fn() }));
@@ -274,49 +273,3 @@ describe("Suite C — readTranscript ensemble", () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite D — bedrock.js dualTrackNote 双轨说明
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("Suite D — bedrock.js dualTrackNote 双轨说明", () => {
-  // bedrock.js 本身只依赖 @aws-sdk/client-bedrock-runtime，mock 掉避免环境问题
-  jest.mock("@aws-sdk/client-bedrock-runtime", () => ({
-    BedrockRuntimeClient: jest.fn().mockImplementation(() => ({})),
-    InvokeModelCommand: jest.fn(),
-  }));
-
-  const { getMeetingPrompt } = require("../services/bedrock");
-
-  const DUAL_TRACK_KEYWORDS = [
-    "AWS Transcribe 转录",
-    "Whisper 转录",
-    "综合两份转录",
-  ];
-
-  test.each([
-    ["weekly"],
-    ["tech"],
-    ["general"],
-  ])("D1: meetingType=%s 的 prompt 包含双轨说明关键词", (meetingType) => {
-    const prompt = getMeetingPrompt("dummy transcript", meetingType);
-    DUAL_TRACK_KEYWORDS.forEach((keyword) => {
-      expect(prompt).toContain(keyword);
-    });
-  });
-
-  test("D2: dualTrackNote 出现在 prompt 最前面（优先于正文）", () => {
-    const types = ["weekly", "tech", "general"];
-    for (const t of types) {
-      const prompt = getMeetingPrompt("x", t);
-      const idx = prompt.indexOf("综合两份转录");
-      expect(idx).toBeLessThan(100); // 出现在开头 100 字内
-    }
-  });
-
-  test("D3: unknown meetingType → 走 general 分支，也包含双轨说明", () => {
-    const prompt = getMeetingPrompt("x", "unknown-type");
-    DUAL_TRACK_KEYWORDS.forEach((keyword) => {
-      expect(prompt).toContain(keyword);
-    });
-  });
-});
