@@ -30,7 +30,7 @@ function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
   "teamKPI": {
     "overview": "团队整体 KPI 完成情况概述",
     "individuals": [
-      { "name": "SPEAKER_X 或姓名", "kpi": "个人 KPI 要点", "status": "on-track / at-risk / completed" }
+      { "name": "负责人姓名或角色（如主持人、成员A）", "kpi": "个人 KPI 要点", "status": "on-track / at-risk / completed" }
     ]
   },
   "announcements": [
@@ -41,7 +41,7 @@ function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
       "project": "项目/客户名称",
       "progress": "本周进展概述",
       "followUps": [
-        { "task": "待跟进事项", "owner": "SPEAKER_X 或姓名", "deadline": "截止时间（如提及）", "status": "new / in-progress / blocked" }
+        { "task": "待跟进事项", "owner": "负责人姓名或角色（如主持人、成员A）", "deadline": "截止时间（如提及）", "status": "new / in-progress / blocked" }
       ],
       "highlights": [{ "point": "亮点", "detail": "详情" }],
       "lowlights": [{ "point": "问题或未达预期", "detail": "影响" }],
@@ -53,9 +53,9 @@ function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
     { "decision": "决策内容", "rationale": "决策原因", "owner": "决策人（如提及）" }
   ],
   "actions": [
-    { "task": "行动项", "owner": "SPEAKER_X 或姓名", "deadline": "截止日期（如提及）", "priority": "high / medium / low", "project": "关联项目（如有）" }
+    { "task": "行动项", "owner": "负责人姓名或角色（如主持人、成员A）", "deadline": "截止日期（如提及）", "priority": "high / medium / low", "project": "关联项目（如有）" }
   ],
-  "participants": ["SPEAKER_0（可能是：角色描述）"],
+  "participants": ["发言人角色（如主持人、成员A、客户代表）"],
   "nextMeeting": "下次会议时间（如有提及）"
 }
 只输出 JSON。`;
@@ -99,9 +99,9 @@ ${transcriptText}
   ],
   "decisions": [{ "decision": "决策内容", "rationale": "决策原因" }],
   "actions": [
-    { "task": "任务描述", "owner": "SPEAKER_X 或姓名", "deadline": "截止日期（如提及）", "priority": "high/medium/low" }
+    { "task": "任务描述", "owner": "负责人姓名或角色（如主持人、成员A）", "deadline": "截止日期（如提及）", "priority": "high/medium/low" }
   ],
-  "participants": ["SPEAKER_0（可能是：角色描述）"],
+  "participants": ["发言人角色（如主持人、成员A、客户代表）"],
   "duration": "会议时长估计",
   "meetingType": "会议类型（周会/项目会/评审会等）"
 }
