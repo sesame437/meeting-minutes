@@ -5,6 +5,7 @@ const { invokeModel } = require("../services/bedrock");
 const { docClient } = require("../db/dynamodb");
 const { UpdateCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { DynamoDBClient, ScanCommand } = require("@aws-sdk/client-dynamodb");
 
 const QUEUE_URL = process.env.SQS_REPORT_QUEUE;
 const EXPORT_QUEUE_URL = process.env.SQS_EXPORT_QUEUE;
@@ -12,6 +13,20 @@ const TABLE = process.env.DYNAMODB_TABLE;
 const REGION = process.env.AWS_REGION;
 
 const s3Client = new S3Client({ region: REGION });
+const dynamoClient = new DynamoDBClient({ region: REGION });
+
+async function fetchGlossaryTerms() {
+  try {
+    const resp = await dynamoClient.send(new ScanCommand({
+      TableName: "meeting-minutes-glossary",
+      ProjectionExpression: "termId",
+    }));
+    return (resp.Items || []).map(item => item.termId?.S).filter(Boolean);
+  } catch (err) {
+    console.warn("[glossary] Failed to fetch terms:", err.message);
+    return [];
+  }
+}
 
 const POLL_INTERVAL = 5000;
 
@@ -153,8 +168,9 @@ async function processMessage(message) {
   }
   const finalTranscript = transcriptParts.join("\n\n");
 
-  // 2. Call Bedrock Claude to generate structured report
-  const responseText = await invokeModel(finalTranscript, meetingType);
+  // 2. Fetch glossary terms and call Bedrock Claude to generate structured report
+  const glossaryTerms = await fetchGlossaryTerms();
+  const responseText = await invokeModel(finalTranscript, meetingType, glossaryTerms);
 
   // 3. Parse the JSON response
   const jsonMatch = responseText.match(/\{[\s\S]*\}/);

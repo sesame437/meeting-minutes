@@ -9,11 +9,17 @@ const bedrockClient = new BedrockRuntimeClient({
 
 const DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-4-6";
 
-function getMeetingPrompt(transcriptText, meetingType) {
-  const dualTrackNote = `如果输入包含 [AWS Transcribe 转录] 和 [Whisper 转录] 两个部分，请综合两份转录的内容生成报告，互相补充和校正。\n\n`;
+function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
+  const speakerNote = transcriptText.includes("[SPEAKER_")
+    ? `转录文本中包含说话人标签（如 [SPEAKER_0]、[SPEAKER_1]），请利用这些标签识别不同发言人，在参会人列表和行动项中标注发言人编号或角色。\n\n`
+    : "";
+
+  const glossaryNote = glossaryTerms.length > 0
+    ? `专有名词词库（请确保报告中使用正确拼写）：${glossaryTerms.join("、")}\n\n`
+    : "";
 
   if (meetingType === "weekly") {
-    return `${dualTrackNote}你是专业会议纪要助手，请分析以下周例会转录文本，生成结构化会议纪要。
+    return `${speakerNote}${glossaryNote}你是专业会议纪要助手，请分析以下周例会转录文本，生成结构化会议纪要。
 
 转录文本：${transcriptText}
 
@@ -32,7 +38,7 @@ function getMeetingPrompt(transcriptText, meetingType) {
   }
 
   if (meetingType === "tech") {
-    return `${dualTrackNote}你是专业技术会议纪要助手，请分析以下技术讨论会转录文本，生成结构化技术会议纪要。
+    return `${speakerNote}${glossaryNote}你是专业技术会议纪要助手，请分析以下技术讨论会转录文本，生成结构化技术会议纪要。
 
 转录文本：${transcriptText}
 
@@ -52,7 +58,7 @@ function getMeetingPrompt(transcriptText, meetingType) {
   }
 
   // general (default)
-  return `${dualTrackNote}你是一个专业的会议纪要助手。请分析以下会议转录文本，生成结构化的会议纪要。
+  return `${speakerNote}${glossaryNote}你是一个专业的会议纪要助手。请分析以下会议转录文本，生成结构化的会议纪要。
 
 转录文本：
 ${transcriptText}
@@ -60,16 +66,18 @@ ${transcriptText}
 请以 JSON 格式输出，包含以下字段：
 {
   "summary": "会议总结（2-3句话）",
+  "keyTopics": [{ "topic": "议题", "discussion": "讨论要点", "conclusion": "结论或待定" }],
   "highlights": [
     { "point": "要点描述", "detail": "详情" }
   ],
   "lowlights": [
     { "point": "风险/问题描述", "detail": "详情" }
   ],
+  "decisions": [{ "decision": "决策内容", "rationale": "决策原因" }],
   "actions": [
-    { "task": "任务描述", "owner": "负责人（如提及）", "deadline": "截止日期（如提及）", "priority": "high/medium/low" }
+    { "task": "任务描述", "owner": "SPEAKER_X 或姓名", "deadline": "截止日期（如提及）", "priority": "high/medium/low" }
   ],
-  "participants": ["参会人列表（如可识别）"],
+  "participants": ["SPEAKER_0（可能是：角色描述）"],
   "duration": "会议时长估计",
   "meetingType": "会议类型（周会/项目会/评审会等）"
 }
@@ -80,6 +88,15 @@ ${transcriptText}
 function truncateTranscript(text) {
   const MAX_TOTAL = 120000;
   const MAX_EACH = 60000;
+
+  // FunASR-only 模式：整体截断（已在 report-worker 层截过 60k）
+  if (text.includes("[FunASR 转录（含说话人标签）]") && !text.includes("[AWS Transcribe 转录]")) {
+    const FUNASR_LABEL = "[FunASR 转录（含说话人标签）]";
+    const idx = text.indexOf(FUNASR_LABEL);
+    const before = text.slice(0, idx); // 可能的前导文字
+    const after = text.slice(idx + FUNASR_LABEL.length);
+    return before + FUNASR_LABEL + after.slice(0, MAX_EACH);
+  }
 
   // 如果是双轨合并文本，各自截断
   if (text.includes("[AWS Transcribe 转录]") && text.includes("[Whisper 转录]")) {
@@ -93,9 +110,9 @@ function truncateTranscript(text) {
   return text.slice(0, MAX_TOTAL);
 }
 
-async function invokeModel(transcriptText, meetingType = "general", modelId = DEFAULT_MODEL_ID) {
+async function invokeModel(transcriptText, meetingType = "general", glossaryTerms = [], modelId = DEFAULT_MODEL_ID) {
   const truncated = truncateTranscript(transcriptText);
-  const prompt = getMeetingPrompt(truncated, meetingType);
+  const prompt = getMeetingPrompt(truncated, meetingType, glossaryTerms);
 
   const resp = await bedrockClient.send(
     new InvokeModelCommand({
