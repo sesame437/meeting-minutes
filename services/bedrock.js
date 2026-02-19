@@ -19,7 +19,7 @@ function getMeetingPrompt(transcriptText, meetingType, glossaryTerms = []) {
     : "";
 
   if (meetingType === "weekly") {
-    return `${speakerNote}${glossaryNote}你是专业会议纪要助手，请分析以下 AWS SA 团队周例会转录文本，生成结构化会议纪要。周例会通常包含三大部分：团队/个人 KPI 汇报、公司公告事项、客户/项目逐个 Review。请注意：若 teamKPI 或 announcements 部分在转录中未明确提及，对应字段输出空数组即可，不要编造内容。
+    return `${speakerNote}${glossaryNote}你是专业会议纪要助手，请分析以下 AWS SA 团队周例会转录文本，生成结构化会议纪要。周例会通常包含三大部分：团队/个人 KPI 汇报、公司公告事项、客户/项目逐个 Review。请注意：若 teamKPI 或 announcements 部分在转录中未明确提及，对应字段输出空数组即可，不要编造内容。每个项目/客户单独作为一个 projectReviews 条目，若会议中多人分别汇报不同项目，请逐项拆分，不要合并为一条。
 
 转录文本：${transcriptText}
 

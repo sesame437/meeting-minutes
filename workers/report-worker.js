@@ -15,13 +15,31 @@ const REGION = process.env.AWS_REGION;
 const s3Client = new S3Client({ region: REGION });
 const dynamoClient = new DynamoDBClient({ region: REGION });
 
+// 内存缓存，TTL 10 分钟
+let _glossaryCache = null;
+let _glossaryCacheAt = 0;
+const GLOSSARY_CACHE_TTL = 10 * 60 * 1000;
+
 async function fetchGlossaryTerms() {
+  if (_glossaryCache && Date.now() - _glossaryCacheAt < GLOSSARY_CACHE_TTL) {
+    return _glossaryCache;
+  }
   try {
-    const resp = await dynamoClient.send(new ScanCommand({
-      TableName: "meeting-minutes-glossary",
-      ProjectionExpression: "termId",
-    }));
-    return (resp.Items || []).map(item => item.termId?.S).filter(Boolean);
+    const terms = [];
+    let lastKey;
+    do {
+      const params = {
+        TableName: "meeting-minutes-glossary",
+        ProjectionExpression: "termId",
+      };
+      if (lastKey) params.ExclusiveStartKey = lastKey;
+      const resp = await dynamoClient.send(new ScanCommand(params));
+      terms.push(...(resp.Items || []).map(item => item.termId?.S).filter(Boolean));
+      lastKey = resp.LastEvaluatedKey;
+    } while (lastKey);
+    _glossaryCache = terms;
+    _glossaryCacheAt = Date.now();
+    return terms;
   } catch (err) {
     console.warn("[glossary] Failed to fetch terms:", err.message);
     return [];
